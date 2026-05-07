@@ -22,11 +22,36 @@ Instale as dependencias:
 pip install -r backend/requirements.txt
 ```
 
+Crie `backend/.env` a partir de `backend/.env.example` e preencha:
+
+```bash
+SUPABASE_URL=https://seu-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=sua-service-role-key
+```
+
+Essa chave fica somente no backend. Sem ela, o cadastro de nutricionistas e
+pacientes retorna erro de configuracao, porque ambos criam usuarios no Supabase
+Auth pelo servidor.
+
 Inicie a API:
 
 ```bash
-fastapi dev backend.app.main:app
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+Ou, pela raiz do projeto:
+
+```bash
+npm run dev:api
+```
+
+Deixe esse terminal aberto enquanto usa o frontend. Se a API nao estiver
+rodando, o navegador mostrara `ERR_CONNECTION_REFUSED` ao chamar
+`http://127.0.0.1:8000`.
+
+Observacao para Windows: `fastapi dev` espera um caminho de arquivo, nao
+`backend.app.main:app`. Em alguns terminais Windows ele tambem pode falhar por
+encoding ao imprimir emojis. O comando com `uvicorn` acima e o mais estavel.
 
 Endpoints iniciais:
 
