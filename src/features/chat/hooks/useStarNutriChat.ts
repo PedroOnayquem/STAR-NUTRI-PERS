@@ -9,35 +9,40 @@ import {
   listChatSessions,
   sendChatMessageStream,
 } from '../services/chatService'
-import type { AiReasoningLevel } from '../types'
+import type { AiReasoningLevel, ChatScope } from '../types'
 
 export function useStarNutriChat({
   patientId,
   reasoningLevel = 'medium',
+  scope,
   externalQueryKey,
 }: {
   patientId?: string
   reasoningLevel?: AiReasoningLevel
+  scope: ChatScope
   externalQueryKey?: unknown[]
 }) {
   const { profile, session } = useAuth()
   const queryClient = useQueryClient()
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [streaming, setStreaming] = useState('')
+  const [streamingActions, setStreamingActions] = useState<unknown[]>([])
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessageRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const sessionsQueryKey = useMemo(
-    () => ['chat-sessions', patientId ?? 'me'],
-    [patientId],
+    () => ['chat-sessions', scope, patientId ?? 'me'],
+    [patientId, scope],
   )
   const canUseChat = Boolean(
-    session && (profile?.role !== 'nutritionist' || patientId),
+    session &&
+      ((scope === 'nutritionist' && profile?.role === 'nutritionist' && patientId) ||
+        (scope === 'patient' && profile?.role === 'patient')),
   )
 
   const sessionsQuery = useQuery({
     queryKey: sessionsQueryKey,
-    queryFn: () => listChatSessions(session, patientId),
+    queryFn: () => listChatSessions(session, scope, patientId),
     enabled: canUseChat,
   })
 
@@ -54,13 +59,13 @@ export function useStarNutriChat({
   }, [selectedSessionId, sessionsQuery.data])
 
   const messagesQueryKey = useMemo(
-    () => ['chat-messages', activeSessionId],
-    [activeSessionId],
+    () => ['chat-messages', scope, activeSessionId],
+    [activeSessionId, scope],
   )
 
   const messagesQuery = useQuery({
     queryKey: messagesQueryKey,
-    queryFn: () => listChatMessages(session, activeSessionId!, { limit: 120 }),
+    queryFn: () => listChatMessages(session, scope, activeSessionId!, { limit: 120 }),
     enabled: Boolean(canUseChat && activeSessionId),
   })
 
@@ -75,8 +80,8 @@ export function useStarNutriChat({
         {
           event: 'INSERT',
           schema: 'public',
-          table: 'chat_messages',
-          filter: `session_id=eq.${activeSessionId}`,
+          table: scope === 'nutritionist' ? 'nutritionist_messages' : 'patient_messages',
+          filter: `chat_id=eq.${activeSessionId}`,
         },
         () => {
           queryClient.invalidateQueries({ queryKey: messagesQueryKey })
@@ -91,7 +96,7 @@ export function useStarNutriChat({
     return () => {
       client.removeChannel(channel)
     }
-  }, [activeSessionId, externalQueryKey, queryClient, sessionsQueryKey, messagesQueryKey])
+  }, [activeSessionId, externalQueryKey, queryClient, scope, sessionsQueryKey, messagesQueryKey])
 
   const createSessionMutation = useMutation({
     mutationFn: () => {
@@ -99,7 +104,7 @@ export function useStarNutriChat({
         throw new Error('Selecione um paciente para criar uma conversa.')
       }
 
-      return createChatSession(session, {
+      return createChatSession(session, scope, {
         patientId,
         title: 'Nova conversa',
       })
@@ -108,7 +113,7 @@ export function useStarNutriChat({
       setError(null)
       setSelectedSessionId(created.id)
       queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
-      queryClient.invalidateQueries({ queryKey: ['chat-messages', created.id] })
+      queryClient.invalidateQueries({ queryKey: ['chat-messages', scope, created.id] })
       if (externalQueryKey) {
         queryClient.invalidateQueries({ queryKey: externalQueryKey })
       }
@@ -126,12 +131,13 @@ export function useStarNutriChat({
 
       setError(null)
       setStreaming('')
+      setStreamingActions([])
       let resolvedSessionId = activeSessionId
       const tempSessionId = activeSessionId || 'new'
       setPendingUserMessage({
         id: `pending-${Date.now()}`,
-        session_id: tempSessionId,
-        sender: profile?.role === 'nutritionist' ? 'nutritionist' : 'patient',
+        chat_id: tempSessionId,
+        sender: scope === 'nutritionist' ? 'nutritionist' : 'patient',
         content,
         metadata: null,
         created_at: new Date().toISOString(),
@@ -141,16 +147,23 @@ export function useStarNutriChat({
         content,
         patientId,
         reasoningLevel,
+        scope,
         session,
         sessionId: activeSessionId,
         onSession: (sessionId) => {
           resolvedSessionId = sessionId
           setSelectedSessionId(sessionId)
           setPendingUserMessage((message) =>
-            message ? { ...message, session_id: sessionId } : message,
+            message ? { ...message, chat_id: sessionId } : message,
           )
-          queryClient.invalidateQueries({ queryKey: ['chat-messages', sessionId] })
+          queryClient.invalidateQueries({ queryKey: ['chat-messages', scope, sessionId] })
           queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
+        },
+        onAction: (payload) => {
+          setStreamingActions((current) => [...current, payload])
+          if (externalQueryKey) {
+            queryClient.invalidateQueries({ queryKey: externalQueryKey })
+          }
         },
         onDelta: (delta) => setStreaming((current) => current + delta),
         onError: (message) => {
@@ -159,9 +172,10 @@ export function useStarNutriChat({
         onDone: () => {
           setPendingUserMessage(null)
           setStreaming('')
+          setStreamingActions([])
           queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
           if (resolvedSessionId) {
-            queryClient.invalidateQueries({ queryKey: ['chat-messages', resolvedSessionId] })
+            queryClient.invalidateQueries({ queryKey: ['chat-messages', scope, resolvedSessionId] })
           }
           if (externalQueryKey) {
             queryClient.invalidateQueries({ queryKey: externalQueryKey })
@@ -170,7 +184,7 @@ export function useStarNutriChat({
       })
 
       if (resolvedSessionId) {
-        queryClient.invalidateQueries({ queryKey: ['chat-messages', resolvedSessionId] })
+        queryClient.invalidateQueries({ queryKey: ['chat-messages', scope, resolvedSessionId] })
       }
     },
     onError: (caught) => {
@@ -178,13 +192,14 @@ export function useStarNutriChat({
     },
     onSettled: () => {
       setPendingUserMessage(null)
+      setStreamingActions([])
     },
   })
 
   const messages = useMemo(() => {
     const base = messagesQuery.data ?? []
     const extras: ChatMessageRecord[] = []
-    if (pendingUserMessage && pendingUserMessage.session_id === (activeSessionId || 'new')) {
+    if (pendingUserMessage && pendingUserMessage.chat_id === (activeSessionId || 'new')) {
       extras.push(pendingUserMessage)
     }
     return [...base, ...extras].sort((a, b) => a.created_at.localeCompare(b.created_at))
@@ -202,5 +217,6 @@ export function useStarNutriChat({
     sending: sendMutation.isPending,
     sessions: sessionsQuery.data ?? [],
     streaming,
+    streamingActions,
   }
 }

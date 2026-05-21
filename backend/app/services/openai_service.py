@@ -100,3 +100,56 @@ class OpenAIChatService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Nao foi possivel conectar a OpenAI.",
             ) from None
+
+    async def complete_with_tools(
+        self,
+        *,
+        system_prompt: str,
+        history: list[dict[str, str]],
+        reasoning_level: str,
+        tools: list[dict],
+        user_message: str,
+    ) -> dict:
+        generation = GENERATION_SETTINGS.get(
+            reasoning_level,
+            GENERATION_SETTINGS["medium"],
+        )
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "developer", "content": system_prompt},
+                *history,
+                {"role": "user", "content": user_message},
+            ],
+            "tools": tools,
+            "tool_choice": "auto",
+            "temperature": 0,
+            "max_completion_tokens": min(generation["max_tokens"], 900),
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=45) as client:
+                response = await client.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload,
+                )
+        except httpx.RequestError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Nao foi possivel conectar a OpenAI.",
+            ) from None
+
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"OpenAI rejeitou a requisicao: {response.text}",
+            )
+
+        body = response.json()
+        return body.get("choices", [{}])[0].get("message", {})

@@ -1,4 +1,5 @@
 export type AiReasoningLevel = 'low' | 'medium' | 'high' | 'ultra'
+export type ChatScope = 'nutritionist' | 'patient'
 
 export const AI_REASONING_LEVELS: Array<{
   id: AiReasoningLevel

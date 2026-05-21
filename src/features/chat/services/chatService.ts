@@ -1,18 +1,30 @@
 import type { Session } from '@supabase/supabase-js'
 import { apiRequest, authHeaders, requireApiBaseUrl } from '../../../lib/api'
 import type { ChatMessageRecord, ChatSessionRecord } from '../../clinical/types'
-import type { AiReasoningLevel } from '../types'
+import type { AiReasoningLevel, ChatScope } from '../types'
 
-export function listChatSessions(session: Session | null, patientId?: string) {
+function chatBasePath(scope: ChatScope) {
+  return scope === 'nutritionist' ? '/api/chat/nutritionist' : '/api/chat/patient'
+}
+
+export function listChatSessions(
+  session: Session | null,
+  scope: ChatScope,
+  patientId?: string,
+) {
   const search = patientId ? `?patient_id=${encodeURIComponent(patientId)}` : ''
-  return apiRequest<ChatSessionRecord[]>(`/api/chat/sessions${search}`, session)
+  return apiRequest<ChatSessionRecord[]>(
+    `${chatBasePath(scope)}/sessions${search}`,
+    session,
+  )
 }
 
 export function createChatSession(
   session: Session | null,
+  scope: ChatScope,
   payload: { patientId?: string; title?: string },
 ) {
-  return apiRequest<ChatSessionRecord>('/api/chat/sessions', session, {
+  return apiRequest<ChatSessionRecord>(`${chatBasePath(scope)}/sessions`, session, {
     method: 'POST',
     body: JSON.stringify({
       patient_id: payload.patientId,
@@ -23,13 +35,14 @@ export function createChatSession(
 
 export function listChatMessages(
   session: Session | null,
+  scope: ChatScope,
   sessionId: string,
   options?: { limit?: number; offset?: number },
 ) {
   const limit = options?.limit ?? 120
   const offset = options?.offset ?? 0
   return apiRequest<ChatMessageRecord[]>(
-    `/api/chat/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`,
+    `${chatBasePath(scope)}/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`,
     session,
   )
 }
@@ -40,22 +53,26 @@ export async function sendChatMessageStream({
   onDone,
   onError,
   onSession,
+  onAction,
   patientId,
   reasoningLevel,
+  scope,
   session,
   sessionId,
 }: {
   content: string
   patientId?: string
   reasoningLevel: AiReasoningLevel
+  scope: ChatScope
   session: Session | null
   sessionId?: string | null
+  onAction?: (payload: unknown) => void
   onDelta: (delta: string) => void
   onError?: (message: string) => void
   onSession?: (sessionId: string) => void
   onDone: (payload: unknown) => void
 }) {
-  const response = await fetch(`${requireApiBaseUrl()}/api/chat/send`, {
+  const response = await fetch(`${requireApiBaseUrl()}${chatBasePath(scope)}/send`, {
     method: 'POST',
     headers: authHeaders(session),
     body: JSON.stringify({
@@ -106,6 +123,9 @@ export async function sendChatMessageStream({
       }
       if (event === 'session') {
         onSession?.(payload.session_id)
+      }
+      if (event === 'action') {
+        onAction?.(payload)
       }
       if (event === 'error') {
         const message = payload.detail ?? 'Erro ao chamar a IA.'

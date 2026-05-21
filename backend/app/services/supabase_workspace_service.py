@@ -205,9 +205,14 @@ class SupabaseWorkspaceService:
             "/rest/v1/workouts",
             params={"select": "id"},
         )
-        messages = await self._request(
+        nutritionist_messages = await self._request(
             "GET",
-            "/rest/v1/chat_messages",
+            "/rest/v1/nutritionist_messages",
+            params={"select": "id"},
+        )
+        patient_messages = await self._request(
+            "GET",
+            "/rest/v1/patient_messages",
             params={"select": "id"},
         )
 
@@ -224,7 +229,7 @@ class SupabaseWorkspaceService:
                 ),
                 "diets": len(diets),
                 "workouts": len(workouts),
-                "chat_messages": len(messages),
+                "chat_messages": len(nutritionist_messages) + len(patient_messages),
             },
         }
 
@@ -248,7 +253,11 @@ class SupabaseWorkspaceService:
                 detail="Paciente fora do seu workspace.",
             )
 
-        return await self.get_patient_context(patient, nutritionist)
+        return await self.get_patient_context(
+            patient,
+            nutritionist,
+            chat_scope="nutritionist",
+        )
 
     async def get_patient_context_for_patient(self, token: str) -> dict:
         profile = await self.get_authenticated_profile(token)
@@ -269,12 +278,88 @@ class SupabaseWorkspaceService:
             },
         )
         nutritionist = nutritionist_rows[0] if nutritionist_rows else None
-        return await self.get_patient_context(patient, nutritionist)
+        return await self.get_patient_context(patient, nutritionist, chat_scope="patient")
+
+    async def get_patient_chat_context_for_patient(self, token: str) -> dict:
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "patient":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas pacientes podem acessar este chat pessoal.",
+            )
+
+        patient = await self.get_patient_by_user_id(profile["id"])
+        patient_profile = await self.get_profile(patient["user_id"])
+        patient_id = patient["id"]
+
+        diets = await self._request(
+            "GET",
+            "/rest/v1/diets",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "is_active": "eq.true",
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": "2",
+            },
+        )
+        workouts = await self._request(
+            "GET",
+            "/rest/v1/workouts",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "is_active": "eq.true",
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": "2",
+            },
+        )
+
+        meals = await self._rows_by_parent("diet_meals", "diet_id", [row["id"] for row in diets])
+        exercises = await self._rows_by_parent(
+            "workout_exercises",
+            "workout_id",
+            [row["id"] for row in workouts],
+        )
+        for diet in diets:
+            diet["meals"] = meals.get(diet["id"], [])
+        for workout in workouts:
+            workout["exercises"] = exercises.get(workout["id"], [])
+
+        return {
+            "patient": {
+                "id": patient["id"],
+                "objective": patient.get("objective"),
+                "profile": patient_profile,
+            },
+            "profile": patient_profile,
+            "nutritionist": None,
+            "main_metrics": [],
+            "variable_metrics": await self._request(
+                "GET",
+                "/rest/v1/patient_variable_metrics",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "id,patient_id,name,value,unit,recorded_at,created_at",
+                    "order": "recorded_at.desc,created_at.desc",
+                    "limit": "20",
+                },
+            ),
+            "conditions": [],
+            "diets": diets,
+            "workouts": workouts,
+            "nutritionist_chats": [],
+            "patient_chats": [],
+            "recent_professional_messages": [],
+            "recent_personal_messages": [],
+        }
 
     async def get_patient_context(
         self,
         patient: dict,
         nutritionist: dict | None,
+        *,
+        chat_scope: str | None = None,
     ) -> dict:
         patient_profile = await self.get_profile(patient["user_id"])
         patient_id = patient["id"]
@@ -310,20 +395,33 @@ class SupabaseWorkspaceService:
         for workout in workouts:
             workout["exercises"] = exercises.get(workout["id"], [])
 
-        sessions = await self._request(
-            "GET",
-            "/rest/v1/chat_sessions",
-            params={
-                "patient_id": f"eq.{patient_id}",
-                "select": "*",
-                "order": "updated_at.desc,created_at.desc",
-            },
-        )
+        nutritionist_chats: list[dict] = []
+        patient_chats: list[dict] = []
+        recent_professional_messages: list[dict] = []
+        recent_personal_messages: list[dict] = []
 
-        recent_messages = await self._get_recent_messages(sessions)
+        if chat_scope == "nutritionist" and nutritionist:
+            nutritionist_chats = await self.list_nutritionist_chats_for_patient(
+                nutritionist["id"],
+                patient_id,
+            )
+            recent_professional_messages = await self._get_recent_messages(
+                nutritionist_chats,
+                "nutritionist_messages",
+            )
+        elif chat_scope == "patient":
+            patient_chats = await self.list_patient_chats_for_patient(patient_id)
+            recent_personal_messages = await self._get_recent_messages(
+                patient_chats,
+                "patient_messages",
+            )
+
+        patient_payload = {**patient, "profile": patient_profile}
+        if chat_scope == "patient":
+            patient_payload["notes"] = None
 
         return {
-            "patient": {**patient, "profile": patient_profile},
+            "patient": patient_payload,
             "profile": patient_profile,
             "nutritionist": nutritionist,
             "main_metrics": await self._request(
@@ -356,8 +454,10 @@ class SupabaseWorkspaceService:
             ),
             "diets": diets,
             "workouts": workouts,
-            "chat_sessions": sessions,
-            "recent_messages": recent_messages,
+            "nutritionist_chats": nutritionist_chats,
+            "patient_chats": patient_chats,
+            "recent_professional_messages": recent_professional_messages,
+            "recent_personal_messages": recent_personal_messages,
         }
 
     async def update_patient(
@@ -419,39 +519,448 @@ class SupabaseWorkspaceService:
         )
         return {"id": updated["id"], "is_active": updated["is_active"]}
 
-    async def create_chat_session(self, patient_id: str, title: str | None = None) -> dict:
+    async def insert_ai_action_log(self, payload: dict) -> dict:
         rows = await self._request(
             "POST",
-            "/rest/v1/chat_sessions",
-            json={"patient_id": patient_id, "title": title or "Acompanhamento IA"},
+            "/rest/v1/ai_action_logs",
+            json=payload,
             prefer="return=representation",
         )
         return rows[0]
 
-    async def ensure_chat_session(self, patient_id: str, session_id: str | None) -> dict:
-        if session_id:
-            rows = await self._request(
-                "GET",
-                "/rest/v1/chat_sessions",
-                params={
-                    "id": f"eq.{session_id}",
-                    "patient_id": f"eq.{patient_id}",
-                    "select": "*",
-                    "limit": "1",
-                },
-            )
-            if rows:
-                return rows[0]
-
-        return await self.create_chat_session(patient_id)
-
-    async def maybe_update_chat_session_title(
+    async def create_health_condition_record(
         self,
-        session: dict,
+        *,
+        patient_id: str,
+        condition_type: str,
+        title: str,
+        description: str,
+        severity: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/patient_health_conditions",
+            json={
+                "patient_id": patient_id,
+                "condition_type": condition_type,
+                "title": title,
+                "description": description,
+                "severity": severity,
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def find_similar_health_condition(
+        self,
+        *,
+        patient_id: str,
+        condition_type: str,
+        title: str,
+    ) -> dict | None:
+        rows = await self._request(
+            "GET",
+            "/rest/v1/patient_health_conditions",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "condition_type": f"eq.{condition_type}",
+                "title": f"ilike.*{title[:48]}*",
+                "select": "*",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def get_latest_variable_metric(
+        self,
+        *,
+        patient_id: str,
+        name: str,
+    ) -> dict | None:
+        rows = await self._request(
+            "GET",
+            "/rest/v1/patient_variable_metrics",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "name": f"ilike.*{name}*",
+                "select": "*",
+                "order": "recorded_at.desc,created_at.desc",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def create_variable_metric_record(
+        self,
+        *,
+        patient_id: str,
+        name: str,
+        value: str,
+        unit: str | None = None,
+        recorded_at: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/patient_variable_metrics",
+            json={
+                "patient_id": patient_id,
+                "name": name,
+                "value": value,
+                "unit": unit,
+                "recorded_at": recorded_at,
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def get_active_diet_with_meals(self, patient_id: str) -> dict | None:
+        rows = await self._request(
+            "GET",
+            "/rest/v1/diets",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "is_active": "eq.true",
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        diet = rows[0] if rows else None
+        if not diet:
+            return None
+
+        meals = await self._request(
+            "GET",
+            "/rest/v1/diet_meals",
+            params={
+                "diet_id": f"eq.{diet['id']}",
+                "select": "*",
+                "order": "meal_time.asc,created_at.asc",
+            },
+        )
+        diet["meals"] = meals
+        return diet
+
+    async def create_diet_meal_record(
+        self,
+        *,
+        diet_id: str,
+        meal_name: str,
+        foods: list[dict],
+        notes: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/diet_meals",
+            json={
+                "diet_id": diet_id,
+                "meal_name": meal_name,
+                "foods": foods,
+                "notes": notes,
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def update_diet_meal_foods(
+        self,
+        *,
+        meal_id: str,
+        foods: list[dict],
+    ) -> dict:
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/diet_meals",
+            params={"id": f"eq.{meal_id}", "select": "*"},
+            json={"foods": foods},
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def update_diet_macro_totals(
+        self,
+        *,
+        diet_id: str,
+        payload: dict,
+    ) -> dict:
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/diets",
+            params={"id": f"eq.{diet_id}", "select": "*"},
+            json=payload,
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def find_appointment(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        scheduled_at: str,
+    ) -> dict | None:
+        rows = await self._request(
+            "GET",
+            "/rest/v1/appointments",
+            params={
+                "nutritionist_id": f"eq.{nutritionist_id}",
+                "patient_id": f"eq.{patient_id}",
+                "scheduled_at": f"eq.{scheduled_at}",
+                "status": "neq.cancelled",
+                "select": "*",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def create_appointment_record(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        title: str,
+        scheduled_at: str,
+        created_by: str,
+        notes: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/appointments",
+            json={
+                "nutritionist_id": nutritionist_id,
+                "patient_id": patient_id,
+                "title": title,
+                "scheduled_at": scheduled_at,
+                "notes": notes,
+                "created_by": created_by,
+                "created_by_ai": True,
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def resolve_nutritionist_patient(
+        self,
+        token: str,
+        patient_id: str,
+    ) -> tuple[dict, dict, dict]:
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas acessam chats profissionais.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        patient = await self._get_patient(patient_id)
+        if patient["nutritionist_id"] != nutritionist["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Paciente fora do seu workspace profissional.",
+            )
+        return profile, nutritionist, patient
+
+    async def resolve_patient_owner(self, token: str) -> tuple[dict, dict]:
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "patient":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas pacientes acessam chats pessoais.",
+            )
+        patient = await self.get_patient_by_user_id(profile["id"])
+        return profile, patient
+
+    async def list_nutritionist_chats_for_patient(
+        self,
+        nutritionist_id: str,
+        patient_id: str,
+    ) -> list[dict]:
+        return await self._request(
+            "GET",
+            "/rest/v1/nutritionist_chats",
+            params={
+                "nutritionist_id": f"eq.{nutritionist_id}",
+                "patient_id": f"eq.{patient_id}",
+                "select": "*",
+                "order": "updated_at.desc,created_at.desc",
+            },
+        )
+
+    async def list_patient_chats_for_patient(self, patient_id: str) -> list[dict]:
+        return await self._request(
+            "GET",
+            "/rest/v1/patient_chats",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "select": "*",
+                "order": "updated_at.desc,created_at.desc",
+            },
+        )
+
+    async def list_authorized_nutritionist_chats(
+        self,
+        token: str,
+        patient_id: str,
+    ) -> list[dict]:
+        _, nutritionist, patient = await self.resolve_nutritionist_patient(
+            token,
+            patient_id,
+        )
+        return await self.list_nutritionist_chats_for_patient(
+            nutritionist["id"],
+            patient["id"],
+        )
+
+    async def list_authorized_patient_chats(self, token: str) -> list[dict]:
+        _, patient = await self.resolve_patient_owner(token)
+        return await self.list_patient_chats_for_patient(patient["id"])
+
+    async def create_nutritionist_chat(
+        self,
+        nutritionist_id: str,
+        patient_id: str,
+        title: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/nutritionist_chats",
+            json={
+                "nutritionist_id": nutritionist_id,
+                "patient_id": patient_id,
+                "title": title or "Nova conversa profissional",
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def create_patient_chat(
+        self,
+        patient_id: str,
+        title: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/patient_chats",
+            json={
+                "patient_id": patient_id,
+                "title": title or "Nova conversa pessoal",
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def create_authorized_nutritionist_chat(
+        self,
+        token: str,
+        patient_id: str,
+        title: str | None = None,
+    ) -> dict:
+        _, nutritionist, patient = await self.resolve_nutritionist_patient(
+            token,
+            patient_id,
+        )
+        return await self.create_nutritionist_chat(
+            nutritionist["id"],
+            patient["id"],
+            title,
+        )
+
+    async def create_authorized_patient_chat(
+        self,
+        token: str,
+        title: str | None = None,
+    ) -> dict:
+        _, patient = await self.resolve_patient_owner(token)
+        return await self.create_patient_chat(patient["id"], title)
+
+    async def get_nutritionist_chat(
+        self,
+        chat_id: str,
+        *,
+        nutritionist_id: str,
+        patient_id: str | None = None,
+    ) -> dict:
+        params = {
+            "id": f"eq.{chat_id}",
+            "nutritionist_id": f"eq.{nutritionist_id}",
+            "select": "*",
+            "limit": "1",
+        }
+        if patient_id:
+            params["patient_id"] = f"eq.{patient_id}"
+
+        rows = await self._request(
+            "GET",
+            "/rest/v1/nutritionist_chats",
+            params=params,
+        )
+        chat = rows[0] if rows else None
+        if not chat:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversa profissional nao encontrada.",
+            )
+        return chat
+
+    async def get_patient_chat(self, chat_id: str, *, patient_id: str) -> dict:
+        rows = await self._request(
+            "GET",
+            "/rest/v1/patient_chats",
+            params={
+                "id": f"eq.{chat_id}",
+                "patient_id": f"eq.{patient_id}",
+                "select": "*",
+                "limit": "1",
+            },
+        )
+        chat = rows[0] if rows else None
+        if not chat:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Conversa pessoal nao encontrada.",
+            )
+        return chat
+
+    async def ensure_nutritionist_chat(
+        self,
+        nutritionist_id: str,
+        patient_id: str,
+        chat_id: str | None,
+    ) -> dict:
+        if chat_id:
+            return await self.get_nutritionist_chat(
+                chat_id,
+                nutritionist_id=nutritionist_id,
+                patient_id=patient_id,
+            )
+        return await self.create_nutritionist_chat(nutritionist_id, patient_id)
+
+    async def ensure_patient_chat(
+        self,
+        patient_id: str,
+        chat_id: str | None,
+    ) -> dict:
+        if chat_id:
+            return await self.get_patient_chat(chat_id, patient_id=patient_id)
+        return await self.create_patient_chat(patient_id)
+
+    async def maybe_update_chat_title(
+        self,
+        *,
+        table: str,
+        chat: dict,
         content: str,
     ) -> None:
-        current_title = (session.get("title") or "").strip()
-        if current_title and current_title not in {"Nova conversa", "Acompanhamento IA"}:
+        current_title = (chat.get("title") or "").strip()
+        default_titles = {
+            "Nova conversa",
+            "Nova conversa pessoal",
+            "Nova conversa profissional",
+            "Acompanhamento IA",
+            "Conversa pessoal",
+            "Conversa profissional",
+        }
+        if current_title and current_title not in default_titles:
             return
 
         clean_title = " ".join(content.split())
@@ -460,136 +969,65 @@ class SupabaseWorkspaceService:
 
         await self._request(
             "PATCH",
-            "/rest/v1/chat_sessions",
-            params={"id": f"eq.{session['id']}"},
+            f"/rest/v1/{table}",
+            params={"id": f"eq.{chat['id']}"},
             json={"title": clean_title[:80]},
         )
 
-    async def get_chat_session(self, session_id: str) -> dict:
-        rows = await self._request(
-            "GET",
-            "/rest/v1/chat_sessions",
-            params={"id": f"eq.{session_id}", "select": "*", "limit": "1"},
-        )
-        session = rows[0] if rows else None
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversa nao encontrada.",
-            )
-        return session
-
-    async def resolve_chat_patient(
+    async def list_authorized_nutritionist_messages(
         self,
         token: str,
-        *,
-        patient_id: str | None = None,
-        session_id: str | None = None,
-    ) -> tuple[dict, dict, str]:
-        profile = await self.get_authenticated_profile(token)
-        session = await self.get_chat_session(session_id) if session_id else None
-
-        if profile["role"] == "patient":
-            patient = await self.get_patient_by_user_id(profile["id"])
-            if patient_id and patient_id != patient["id"]:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Paciente nao pode acessar chat de outro paciente.",
-                )
-            if session and session["patient_id"] != patient["id"]:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Conversa fora do paciente autenticado.",
-                )
-            return profile, patient, "patient"
-
-        if profile["role"] == "nutritionist":
-            nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
-            if session and patient_id and session["patient_id"] != patient_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Conversa nao pertence ao paciente selecionado.",
-                )
-
-            if session:
-                patient = await self._get_patient(session["patient_id"])
-            elif patient_id:
-                patient = await self._get_patient(patient_id)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="patient_id e obrigatorio para nutricionistas.",
-                )
-
-            if patient["nutritionist_id"] != nutritionist["id"]:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Nutricionista sem acesso a este paciente.",
-                )
-            return profile, patient, "nutritionist"
-
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admins nao participam do chat clinico.",
-        )
-
-    async def list_authorized_chat_sessions(
-        self,
-        token: str,
-        patient_id: str | None = None,
-    ) -> list[dict]:
-        _, patient, _ = await self.resolve_chat_patient(token, patient_id=patient_id)
-        return await self._request(
-            "GET",
-            "/rest/v1/chat_sessions",
-            params={
-                "patient_id": f"eq.{patient['id']}",
-                "select": "*",
-                "order": "updated_at.desc,created_at.desc",
-            },
-        )
-
-    async def create_authorized_chat_session(
-        self,
-        token: str,
-        patient_id: str | None,
-        title: str | None = None,
-    ) -> dict:
-        _, patient, _ = await self.resolve_chat_patient(token, patient_id=patient_id)
-        return await self.create_chat_session(patient["id"], title)
-
-    async def get_authorized_chat_messages(
-        self,
-        token: str,
-        session_id: str,
+        chat_id: str,
         limit: int = 120,
         offset: int = 0,
     ) -> list[dict]:
-        await self.resolve_chat_patient(token, session_id=session_id)
-        return await self._request(
-            "GET",
-            "/rest/v1/chat_messages",
-            params={
-                "session_id": f"eq.{session_id}",
-                "select": "*",
-                "order": "created_at.asc",
-                "limit": str(limit),
-                "offset": str(offset),
-            },
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas acessam mensagens profissionais.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        await self.get_nutritionist_chat(chat_id, nutritionist_id=nutritionist["id"])
+        return await self._list_chat_messages(
+            "nutritionist_messages",
+            chat_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def list_authorized_patient_messages(
+        self,
+        token: str,
+        chat_id: str,
+        limit: int = 120,
+        offset: int = 0,
+    ) -> list[dict]:
+        _, patient = await self.resolve_patient_owner(token)
+        await self.get_patient_chat(chat_id, patient_id=patient["id"])
+        return await self._list_chat_messages(
+            "patient_messages",
+            chat_id,
+            limit=limit,
+            offset=offset,
         )
 
     async def insert_chat_message(
         self,
-        session_id: str,
+        *,
+        messages_table: str,
+        chats_table: str,
+        chat_id: str,
         sender: str,
         content: str,
         metadata: dict | None = None,
     ) -> dict:
         rows = await self._request(
             "POST",
-            "/rest/v1/chat_messages",
+            f"/rest/v1/{messages_table}",
             json={
-                "session_id": session_id,
+                "chat_id": chat_id,
                 "sender": sender,
                 "content": content,
                 "metadata": metadata or {},
@@ -598,11 +1036,31 @@ class SupabaseWorkspaceService:
         )
         await self._request(
             "PATCH",
-            "/rest/v1/chat_sessions",
-            params={"id": f"eq.{session_id}"},
+            f"/rest/v1/{chats_table}",
+            params={"id": f"eq.{chat_id}"},
             json={"updated_at": datetime.now(UTC).isoformat()},
         )
         return rows[0]
+
+    async def _list_chat_messages(
+        self,
+        table: str,
+        chat_id: str,
+        *,
+        limit: int = 120,
+        offset: int = 0,
+    ) -> list[dict]:
+        return await self._request(
+            "GET",
+            f"/rest/v1/{table}",
+            params={
+                "chat_id": f"eq.{chat_id}",
+                "select": "*",
+                "order": "created_at.asc",
+                "limit": str(limit),
+                "offset": str(offset),
+            },
+        )
 
     async def _get_patient(self, patient_id: str) -> dict:
         rows = await self._request(
@@ -660,16 +1118,16 @@ class SupabaseWorkspaceService:
             grouped.setdefault(row[parent_column], []).append(row)
         return grouped
 
-    async def _get_recent_messages(self, sessions: list[dict]) -> list[dict]:
-        if not sessions:
+    async def _get_recent_messages(self, chats: list[dict], table: str) -> list[dict]:
+        if not chats:
             return []
 
-        session_ids = [session["id"] for session in sessions[:5]]
+        chat_ids = [chat["id"] for chat in chats[:5]]
         return await self._request(
             "GET",
-            "/rest/v1/chat_messages",
+            f"/rest/v1/{table}",
             params={
-                "session_id": f"in.({','.join(session_ids)})",
+                "chat_id": f"in.({','.join(chat_ids)})",
                 "select": "*",
                 "order": "created_at.desc",
                 "limit": "80",

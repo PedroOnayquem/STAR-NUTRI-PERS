@@ -47,6 +47,7 @@ export function NutritionistChatPage() {
         patients.find((patient) => patient.id === focusedPatientId)?.profile
           ?.full_name ?? 'Paciente'
       }
+      scope="nutritionist"
     />
   )
 }

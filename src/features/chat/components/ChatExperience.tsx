@@ -13,17 +13,20 @@ import {
   BrainCircuit,
   Check,
   ChevronDown,
+  CircleAlert,
+  CircleCheck,
+  Clock,
   Loader2,
   MessageSquarePlus,
   Search,
   Send,
   Sparkles,
+  XCircle,
 } from 'lucide-react'
 import { Button } from '../../../components/ui/Button'
 import { Skeleton } from '../../../components/ui/Skeleton'
 import { Textarea } from '../../../components/ui/Input'
 import { cn } from '../../../lib/utils'
-import { useAuth } from '../../auth/useAuth'
 import type {
   ChatMessageRecord,
   ChatSessionRecord,
@@ -33,6 +36,7 @@ import { useStarNutriChat } from '../hooks/useStarNutriChat'
 import {
   AI_REASONING_LEVELS,
   type AiReasoningLevel,
+  type ChatScope,
 } from '../types'
 
 type ChatExperienceProps = {
@@ -42,6 +46,7 @@ type ChatExperienceProps = {
   patientId?: string | null
   patientName?: string
   patients?: PatientRecord[]
+  scope: ChatScope
 }
 
 export function ChatExperience({
@@ -51,8 +56,8 @@ export function ChatExperience({
   patientId,
   patientName,
   patients,
+  scope,
 }: ChatExperienceProps) {
-  const { profile } = useAuth()
   const [content, setContent] = useState('')
   const [conversationSearch, setConversationSearch] = useState('')
   const [reasoningLevel, setReasoningLevel] = useState<AiReasoningLevel>('medium')
@@ -62,6 +67,7 @@ export function ChatExperience({
     externalQueryKey,
     patientId: normalizedPatientId,
     reasoningLevel,
+    scope,
   })
 
   const patientOptions = useMemo(
@@ -77,7 +83,8 @@ export function ChatExperience({
   const selectedPatient = patientOptions.find((patient) => patient.id === patientId)
   const canSelectPatient = Boolean(onPatientChange && patientOptions.length > 0)
   const selectedPatientName = selectedPatient?.name ?? patientName ?? 'Paciente'
-  const hasRequiredFocus = !canSelectPatient || Boolean(patientId)
+  const isProfessional = scope === 'nutritionist'
+  const hasRequiredFocus = !isProfessional || !canSelectPatient || Boolean(patientId)
   const currentSession = chat.sessions.find(
     (session) => session.id === chat.activeSessionId,
   )
@@ -122,7 +129,7 @@ export function ChatExperience({
           onCreateSession={chat.createSession}
           onSearch={setConversationSearch}
           onSelectSession={chat.selectSession}
-          patientName={selectedPatientName}
+          patientName={isProfessional ? selectedPatientName : 'Chat pessoal'}
           search={conversationSearch}
           sessions={filteredSessions}
         />
@@ -136,6 +143,7 @@ export function ChatExperience({
             patientName={selectedPatientName}
             patients={patientOptions}
             reasoningLevel={reasoningLevel}
+            scope={scope}
           />
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
@@ -150,11 +158,15 @@ export function ChatExperience({
               ) : chat.messages.length === 0 && !chat.streaming ? (
                 <ChatEmpty
                   description={
-                    profile?.role === 'nutritionist'
+                    isProfessional
                       ? 'Pergunte sobre evolucao, aderencia ou pontos de atencao.'
-                      : 'Pergunte sobre sua dieta, treino, rotina ou metricas.'
+                      : 'Pergunte sobre sua dieta ativa, treino, rotina, compras ou organizacao do dia.'
                   }
-                  title={`Chat com IA para ${selectedPatientName}`}
+                  title={
+                    isProfessional
+                      ? `Chat profissional para ${selectedPatientName}`
+                      : 'Seu chat pessoal com IA'
+                  }
                 />
               ) : (
                 <div className="space-y-6">
@@ -163,7 +175,7 @@ export function ChatExperience({
                       key={message.id}
                       message={message}
                       own={
-                        profile?.role === 'patient'
+                        scope === 'patient'
                           ? message.sender === 'patient'
                           : message.sender === 'nutritionist'
                       }
@@ -174,10 +186,10 @@ export function ChatExperience({
                       message={{
                         content: chat.streaming,
                         created_at: new Date().toISOString(),
+                        chat_id: chat.activeSessionId || 'new',
                         id: 'streaming',
-                        metadata: null,
+                        metadata: { agent_actions: chat.streamingActions },
                         sender: 'ai',
-                        session_id: chat.activeSessionId || 'new',
                       }}
                       own={false}
                       streaming
@@ -214,7 +226,9 @@ export function ChatExperience({
                   }}
                   placeholder={
                     hasRequiredFocus
-                      ? 'Mensagem para o Star Nutri...'
+                      ? isProfessional
+                        ? 'Mensagem profissional para o Star Nutri...'
+                        : 'Pergunte sobre sua rotina...'
                       : 'Selecione um paciente para conversar'
                   }
                   rows={1}
@@ -342,6 +356,7 @@ function ChatTopbar({
   patientName,
   patients,
   reasoningLevel,
+  scope,
 }: {
   currentTitle: string
   onPatientChange?: (patientId: string) => void
@@ -350,6 +365,7 @@ function ChatTopbar({
   patientName: string
   patients: Array<{ email: string; id: string; name: string; objective: string }>
   reasoningLevel: AiReasoningLevel
+  scope: ChatScope
 }) {
   const [patientMenuOpen, setPatientMenuOpen] = useState(false)
   const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false)
@@ -368,7 +384,9 @@ function ChatTopbar({
             {currentTitle}
           </h2>
           <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-            {selectedReasoning?.label ?? 'Pensamento Medio'}
+            {scope === 'nutritionist'
+              ? selectedReasoning?.label ?? 'Pensamento Medio'
+              : 'Historico pessoal e privado'}
           </p>
         </div>
       </div>
@@ -389,15 +407,17 @@ function ChatTopbar({
           <StaticPatientPill patientName={patientName} />
         )}
 
-        <ReasoningMenu
-          onChange={(nextLevel) => {
-            onReasoningChange(nextLevel)
-            setReasoningMenuOpen(false)
-          }}
-          onOpenChange={setReasoningMenuOpen}
-          open={reasoningMenuOpen}
-          reasoningLevel={reasoningLevel}
-        />
+        {scope === 'nutritionist' && (
+          <ReasoningMenu
+            onChange={(nextLevel) => {
+              onReasoningChange(nextLevel)
+              setReasoningMenuOpen(false)
+            }}
+            onOpenChange={setReasoningMenuOpen}
+            open={reasoningMenuOpen}
+            reasoningLevel={reasoningLevel}
+          />
+        )}
       </div>
     </header>
   )
@@ -580,6 +600,15 @@ function reasoningDotClass(level: AiReasoningLevel) {
   return 'bg-violet-500'
 }
 
+type AgentAction = {
+  error?: string | null
+  label?: string
+  requires_confirmation?: boolean
+  status?: 'executed' | 'skipped' | 'failed' | 'pending_confirmation'
+  summary?: string | null
+  tool?: string
+}
+
 function MessageBubble({
   message,
   own,
@@ -589,6 +618,8 @@ function MessageBubble({
   own: boolean
   streaming?: boolean
 }) {
+  const actions = getAgentActions(message.metadata)
+
   return (
     <motion.div
       animate={{ opacity: 1, y: 0 }}
@@ -610,12 +641,69 @@ function MessageBubble({
         )}
       >
         <MarkdownContent content={message.content} />
+        {!own && actions.length > 0 && <AgentActionList actions={actions} />}
         {streaming && (
           <span className="mt-2 inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
         )}
       </div>
     </motion.div>
   )
+}
+
+function AgentActionList({ actions }: { actions: AgentAction[] }) {
+  return (
+    <div className="mt-3 space-y-2">
+      {actions.map((action, index) => {
+        const status = action.status ?? 'skipped'
+        const Icon = actionIcon(status)
+        return (
+          <div
+            className={cn(
+              'flex items-start gap-2 rounded-2xl border px-3 py-2 text-xs leading-5',
+              actionTone(status),
+            )}
+            key={`${action.tool ?? 'action'}-${index}`}
+          >
+            <Icon className="mt-0.5 shrink-0" size={15} />
+            <div className="min-w-0">
+              <p className="font-black">{action.label ?? action.tool ?? 'Acao do agente'}</p>
+              {(action.summary || action.error) && (
+                <p className="mt-0.5 text-[11px] leading-5 opacity-80">
+                  {action.summary || action.error}
+                </p>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function getAgentActions(metadata: ChatMessageRecord['metadata']): AgentAction[] {
+  const raw = metadata?.agent_actions
+  if (!Array.isArray(raw)) return []
+  return raw.filter((item): item is AgentAction => Boolean(item && typeof item === 'object'))
+}
+
+function actionIcon(status: AgentAction['status']) {
+  if (status === 'executed') return CircleCheck
+  if (status === 'pending_confirmation') return Clock
+  if (status === 'failed') return XCircle
+  return CircleAlert
+}
+
+function actionTone(status: AgentAction['status']) {
+  if (status === 'executed') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200'
+  }
+  if (status === 'pending_confirmation') {
+    return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'
+  }
+  if (status === 'failed') {
+    return 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200'
+  }
+  return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300'
 }
 
 function MarkdownContent({ content }: { content: string }) {

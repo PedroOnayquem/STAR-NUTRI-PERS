@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import json
 
-from fastapi import HTTPException, status
-
 from .supabase_workspace_service import SupabaseWorkspaceService
 
 
@@ -55,33 +53,51 @@ class ChatContextService:
     def __init__(self, workspace: SupabaseWorkspaceService) -> None:
         self.workspace = workspace
 
+    async def resolve_nutritionist_context(
+        self,
+        token: str,
+        patient_id: str,
+        chat_id: str | None,
+    ) -> tuple[dict, dict, str]:
+        _, nutritionist, patient = await self.workspace.resolve_nutritionist_patient(
+            token,
+            patient_id,
+        )
+
+        context = await self.workspace.get_patient_context_for_nutritionist(
+            token,
+            patient["id"],
+        )
+        chat = await self.workspace.ensure_nutritionist_chat(
+            nutritionist["id"],
+            patient["id"],
+            chat_id,
+        )
+        return context, chat, "nutritionist"
+
+    async def resolve_patient_context(
+        self,
+        token: str,
+        chat_id: str | None,
+    ) -> tuple[dict, dict, str]:
+        _, patient = await self.workspace.resolve_patient_owner(token)
+        context = await self.workspace.get_patient_chat_context_for_patient(token)
+        chat = await self.workspace.ensure_patient_chat(patient["id"], chat_id)
+        return context, chat, "patient"
+
     async def resolve_context(
         self,
         token: str,
         patient_id: str | None,
         session_id: str | None,
     ) -> tuple[dict, dict, str]:
-        _, patient, sender = await self.workspace.resolve_chat_patient(
-            token,
-            patient_id=patient_id,
-            session_id=session_id,
-        )
-
-        if sender == "patient":
-            context = await self.workspace.get_patient_context_for_patient(token)
-        elif sender == "nutritionist":
-            context = await self.workspace.get_patient_context_for_nutritionist(
+        if patient_id:
+            return await self.resolve_nutritionist_context(
                 token,
-                patient["id"],
+                patient_id,
+                session_id,
             )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Perfil sem permissao para chat clinico.",
-            )
-
-        session = await self.workspace.ensure_chat_session(patient["id"], session_id)
-        return context, session, sender
+        return await self.resolve_patient_context(token, session_id)
 
     def build_system_prompt(
         self,
@@ -89,6 +105,7 @@ class ChatContextService:
         user_message: str,
         history: list[dict[str, str]],
         reasoning_level: str,
+        chat_scope: str,
     ) -> str:
         settings = self.get_reasoning_settings(reasoning_level)
         patient = context["patient"]
@@ -101,6 +118,45 @@ class ChatContextService:
             (workout for workout in context["workouts"] if workout.get("is_active")),
             None,
         )
+
+        if chat_scope == "patient":
+            patient_context = {
+                "paciente": {
+                    "nome": profile.get("full_name"),
+                    "objetivo": patient.get("objective"),
+                },
+                "nivel_de_inteligencia": settings["label"],
+                "dieta_ativa": active_diet,
+                "treino_ativo": active_workout,
+                "metricas_recentes_informadas_pelo_paciente": context[
+                    "variable_metrics"
+                ][: settings["metric_limit"]],
+            }
+
+            return (
+                "Você é o assistente pessoal de rotina do paciente no Star Nutri.\n\n"
+                "Você conversa diretamente com o paciente, com tom claro, acolhedor e prático.\n"
+                "Você pode ajudar a entender o plano ativo, organizar rotina, lembrar hidratação, "
+                "tirar dúvidas gerais e sugerir perguntas para levar ao nutricionista.\n\n"
+                "Limites obrigatórios deste chat pessoal:\n"
+                "- Você NÃO tem acesso a análises internas do nutricionista.\n"
+                "- Você NÃO deve mencionar notas clínicas privadas, hipóteses profissionais ou "
+                "bastidores do atendimento.\n"
+                "- Você NÃO cria uma dieta nova nem altera a dieta ativa.\n"
+                "- Você NÃO cria ou altera treino.\n"
+                "- Você NÃO diagnostica doenças e NÃO prescreve medicamentos.\n"
+                "- Se houver sintomas importantes ou risco à saúde, oriente buscar atendimento "
+                "profissional.\n\n"
+                "Nivel de raciocinio solicitado:\n"
+                f"{settings['label']} - {settings['instruction']}\n\n"
+                "Contexto permitido para o paciente:\n"
+                f"{json.dumps(patient_context, ensure_ascii=False, default=str)}\n\n"
+                "Histórico recente deste chat pessoal:\n"
+                f"{json.dumps(history, ensure_ascii=False, default=str)}\n\n"
+                "Mensagem do paciente:\n"
+                f"{user_message}\n\n"
+                "Responda de forma útil, simples e segura."
+            )
 
         clinical_context = {
             "paciente": {
@@ -121,16 +177,17 @@ class ChatContextService:
         }
 
         return (
-            "Você é a IA assistente do sistema Star Nutri.\n\n"
-            "Você ajuda nutricionistas e pacientes no acompanhamento nutricional.\n"
-            "Você deve responder com base nos dados reais cadastrados no sistema.\n\n"
+            "Você é a IA profissional do nutricionista dentro do Star Nutri.\n\n"
+            "Você ajuda o nutricionista a analisar pacientes, planejar acompanhamentos, "
+            "estruturar hipóteses nutricionais e preparar materiais de trabalho.\n"
+            "Este chat é privado do nutricionista e nunca deve ser apresentado como "
+            "histórico pessoal do paciente.\n\n"
             "Regras obrigatórias:\n"
-            "- Você NÃO substitui nutricionista.\n"
+            "- Você apoia o nutricionista, mas NÃO substitui julgamento profissional.\n"
             "- Você NÃO substitui médico.\n"
             "- Você NÃO diagnostica doenças.\n"
             "- Você NÃO prescreve medicamentos.\n"
-            "- Você NÃO cria dietas novas sem autorização do nutricionista.\n"
-            "- Você NÃO altera treinos sem autorização do nutricionista.\n"
+            "- Você pode sugerir rascunhos de planos e acompanhamentos para revisão do nutricionista.\n"
             "- Você NÃO promete resultados.\n"
             "- Você sempre considera os dados reais cadastrados.\n"
             "- Você responde com segurança, clareza e responsabilidade.\n"
@@ -148,24 +205,6 @@ class ChatContextService:
 
     def get_reasoning_settings(self, reasoning_level: str) -> dict:
         return REASONING_SETTINGS.get(reasoning_level, REASONING_SETTINGS["medium"])
-
-    def build_history(self, context: dict, session_id: str) -> list[dict[str, str]]:
-        messages = [
-            message
-            for message in reversed(context["recent_messages"])
-            if message.get("session_id") == session_id
-        ][-12:]
-
-        history: list[dict[str, str]] = []
-        for message in messages:
-            sender = message.get("sender")
-            if sender == "ai":
-                role = "assistant"
-            else:
-                role = "user"
-            history.append({"role": role, "content": message.get("content", "")})
-
-        return history
 
     def build_history_from_messages(
         self,

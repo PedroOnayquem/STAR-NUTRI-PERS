@@ -136,6 +136,7 @@ export function PatientDetailPage() {
           externalQueryKey={queryKey}
           patientId={context.patient.id}
           patientName={context.profile?.full_name ?? undefined}
+          scope="nutritionist"
         />
       )}
     </div>

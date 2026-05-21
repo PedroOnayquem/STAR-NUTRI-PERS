@@ -71,6 +71,7 @@ export function PatientWorkspacePage({
         <ChatExperience
           externalQueryKey={queryKey}
           patientName={context.profile?.full_name ?? undefined}
+          scope="patient"
         />
       )}
       {view === 'profile' && <Profile context={context} />}
@@ -108,7 +109,7 @@ function PatientDashboard({ context }: { context: PatientContext }) {
           <div className="mt-6 grid gap-3">
             <MiniStatus label="Metricas registradas" value={context.variable_metrics.length} />
             <MiniStatus label="Condicoes consideradas" value={context.conditions.length} />
-            <MiniStatus label="Conversas com IA" value={context.chat_sessions.length} />
+            <MiniStatus label="Conversas com IA" value={context.patient_chats.length} />
           </div>
         </Card>
         <Card className="p-5">

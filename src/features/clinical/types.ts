@@ -118,6 +118,7 @@ export type WorkoutRecord = {
 export type ChatSessionRecord = {
   id: string
   patient_id: string
+  nutritionist_id?: string
   title: string | null
   created_at: string
   updated_at: string | null
@@ -125,7 +126,7 @@ export type ChatSessionRecord = {
 
 export type ChatMessageRecord = {
   id: string
-  session_id: string
+  chat_id: string
   sender: 'patient' | 'ai' | 'nutritionist'
   content: string
   metadata: Record<string, unknown> | null
@@ -141,8 +142,10 @@ export type PatientContext = {
   conditions: HealthConditionRecord[]
   diets: DietRecord[]
   workouts: WorkoutRecord[]
-  chat_sessions: ChatSessionRecord[]
-  recent_messages: ChatMessageRecord[]
+  nutritionist_chats: ChatSessionRecord[]
+  patient_chats: ChatSessionRecord[]
+  recent_professional_messages: ChatMessageRecord[]
+  recent_personal_messages: ChatMessageRecord[]
 }
 
 export type NutritionistWorkspace = {

@@ -405,10 +405,14 @@ POST   /api/patients/{patient_id}/main-metrics
 GET    /api/patients/{patient_id}/variable-metrics
 POST   /api/patients/{patient_id}/variable-metrics
 
-POST   /api/chat/sessions
-GET    /api/chat/sessions
-GET    /api/chat/sessions/{session_id}/messages
-POST   /api/chat/sessions/{session_id}/message
+POST   /api/chat/nutritionist/sessions
+GET    /api/chat/nutritionist/sessions?patient_id={patient_id}
+GET    /api/chat/nutritionist/sessions/{session_id}/messages
+POST   /api/chat/nutritionist/send
+POST   /api/chat/patient/sessions
+GET    /api/chat/patient/sessions
+GET    /api/chat/patient/sessions/{session_id}/messages
+POST   /api/chat/patient/send
 ```
 
 ## 8. Gerenciamento de Estado
@@ -541,41 +545,42 @@ Implementacao:
 
 Fluxo:
 
-1. Paciente abre chat.
-2. Frontend busca ou cria `chat_session`.
-3. Frontend assina Realtime para `chat_messages` da sessao.
-4. Paciente envia mensagem ao backend:
+1. Nutricionista ou paciente abre seu ambiente de chat.
+2. Frontend usa endpoints separados:
+   - Nutricionista: `nutritionist_chats` e `nutritionist_messages`.
+   - Paciente: `patient_chats` e `patient_messages`.
+3. Frontend assina Realtime apenas na tabela de mensagens do seu escopo.
+4. Usuario envia mensagem ao backend:
 
 ```text
-POST /api/chat/sessions/{session_id}/message
+POST /api/chat/nutritionist/send
+POST /api/chat/patient/send
 Authorization: Bearer <supabase_jwt>
 ```
 
 5. Backend valida:
-   - Usuario autenticado.
-   - Sessao existe.
-   - Usuario pode acessar aquele paciente.
-   - Paciente esta ativo.
-6. Backend salva mensagem do paciente.
+    - Usuario autenticado.
+    - Escopo do chat.
+    - Ownership da conversa.
+    - Nutricionista pertence ao paciente em foco no chat profissional.
+    - Paciente acessa apenas seu chat pessoal.
+6. Backend salva mensagem na tabela isolada do escopo.
 7. Backend busca contexto atualizado:
-   - Perfil do paciente.
-   - Objetivo.
-   - Observacoes.
-   - Dieta ativa e refeicoes.
-   - Treino ativo e exercicios.
-   - Metricas principais.
-   - Ultimas metricas variaveis.
-   - Doencas, alergias, restricoes, lesoes, medicamentos.
-   - Historico recente da conversa.
+    - Chat profissional: contexto clinico completo do paciente.
+    - Chat pessoal: plano ativo e dados permitidos ao paciente.
+    - Historico recente apenas da conversa do mesmo escopo.
 8. Backend monta prompt seguro.
-9. Backend chama ChatGPT.
-10. Backend valida resposta:
-    - Nao prescreve nova dieta.
-    - Nao altera treino.
-    - Nao diagnostica.
-    - Orienta procurar profissional quando necessario.
-11. Backend salva resposta da IA.
-12. Frontend recebe via resposta HTTP e/ou Realtime.
+9. Orquestrador do agente avalia intencao, entidades e tools permitidas.
+10. Tools simples podem executar mutacoes reais no backend; acoes criticas geram confirmacao pendente.
+11. Toda tool grava `ai_action_logs` com input, resultado, estado antes/depois e usuario responsavel.
+12. Backend chama ChatGPT com o resumo das acoes executadas ou bloqueadas.
+13. Backend valida resposta:
+     - Nao prescreve nova dieta.
+     - Nao altera treino.
+     - Nao diagnostica.
+     - Orienta procurar profissional quando necessario.
+14. Backend salva resposta da IA com `metadata.agent_actions`.
+15. Frontend recebe via SSE e/ou Realtime.
 
 Contrato de contexto:
 
@@ -611,9 +616,10 @@ Quando faltar dado, diga que o nutricionista precisa avaliar.
 
 ```text
 backend/app/services/
-  ai_context_service.py
+  chat_context_service.py
+  ai_agent_service.py
   openai_service.py
-  chat_service.py
+  supabase_workspace_service.py
 
 backend/app/policies/
   chat_policy.py
@@ -621,10 +627,21 @@ backend/app/policies/
 
 Responsabilidades:
 
-- `ai_context_service`: busca e normaliza dados do paciente.
+- `chat_context_service`: busca e normaliza dados permitidos por escopo.
+- `ai_agent_service`: interpreta mensagens, escolhe tools, valida risco/escopo e executa acoes auditaveis.
 - `openai_service`: encapsula chamada ao ChatGPT pela API da OpenAI.
-- `chat_service`: salva mensagens, chama IA e retorna resposta.
-- `chat_policy`: bloqueia pedidos inseguros e valida escopo.
+- `supabase_workspace_service`: concentra queries e mutations protegidas no Supabase.
+- `chat_policy`: bloqueia pedidos inseguros e valida escopo quando a regra crescer alem do route/service.
+
+Tools operacionais iniciais:
+
+- `register_injury`
+- `register_weight_change`
+- `register_progress`
+- `add_observation`
+- `add_food_to_meal`
+- `create_appointment`
+- `request_confirmation`
 
 O frontend pode exibir um preview do contexto, mas a fonte da verdade deve ser o backend.
 
@@ -707,11 +724,12 @@ Padrao:
 
 ```text
 Frontend assina:
-chat_messages where session_id = current_session
+nutritionist_messages where chat_id = current_chat
+patient_messages where chat_id = current_chat
 
 Backend escreve:
-chat_messages patient
-chat_messages ai
+nutritionist_messages nutritionist/ai
+patient_messages patient/ai
 
 Frontend renderiza:
 mensagens recebidas via realtime
@@ -831,8 +849,10 @@ Tabelas atuais esperadas:
 - `diet_meals`
 - `workouts`
 - `workout_exercises`
-- `chat_sessions`
-- `chat_messages`
+- `nutritionist_chats`
+- `nutritionist_messages`
+- `patient_chats`
+- `patient_messages`
 - `activity_logs`
 
 Possiveis tabelas futuras:
