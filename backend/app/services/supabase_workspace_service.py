@@ -445,6 +445,26 @@ class SupabaseWorkspaceService:
 
         return await self.create_chat_session(patient_id)
 
+    async def maybe_update_chat_session_title(
+        self,
+        session: dict,
+        content: str,
+    ) -> None:
+        current_title = (session.get("title") or "").strip()
+        if current_title and current_title not in {"Nova conversa", "Acompanhamento IA"}:
+            return
+
+        clean_title = " ".join(content.split())
+        if not clean_title:
+            return
+
+        await self._request(
+            "PATCH",
+            "/rest/v1/chat_sessions",
+            params={"id": f"eq.{session['id']}"},
+            json={"title": clean_title[:80]},
+        )
+
     async def get_chat_session(self, session_id: str) -> dict:
         rows = await self._request(
             "GET",
@@ -485,6 +505,12 @@ class SupabaseWorkspaceService:
 
         if profile["role"] == "nutritionist":
             nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+            if session and patient_id and session["patient_id"] != patient_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Conversa nao pertence ao paciente selecionado.",
+                )
+
             if session:
                 patient = await self._get_patient(session["patient_id"])
             elif patient_id:
@@ -536,6 +562,8 @@ class SupabaseWorkspaceService:
         self,
         token: str,
         session_id: str,
+        limit: int = 120,
+        offset: int = 0,
     ) -> list[dict]:
         await self.resolve_chat_patient(token, session_id=session_id)
         return await self._request(
@@ -545,7 +573,8 @@ class SupabaseWorkspaceService:
                 "session_id": f"eq.{session_id}",
                 "select": "*",
                 "order": "created_at.asc",
-                "limit": "300",
+                "limit": str(limit),
+                "offset": str(offset),
             },
         )
 

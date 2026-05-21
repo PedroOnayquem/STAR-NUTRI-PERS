@@ -1,6 +1,7 @@
 import type { Session } from '@supabase/supabase-js'
 import { apiRequest, authHeaders, requireApiBaseUrl } from '../../../lib/api'
 import type { ChatMessageRecord, ChatSessionRecord } from '../../clinical/types'
+import type { AiReasoningLevel } from '../types'
 
 export function listChatSessions(session: Session | null, patientId?: string) {
   const search = patientId ? `?patient_id=${encodeURIComponent(patientId)}` : ''
@@ -20,9 +21,15 @@ export function createChatSession(
   })
 }
 
-export function listChatMessages(session: Session | null, sessionId: string) {
+export function listChatMessages(
+  session: Session | null,
+  sessionId: string,
+  options?: { limit?: number; offset?: number },
+) {
+  const limit = options?.limit ?? 120
+  const offset = options?.offset ?? 0
   return apiRequest<ChatMessageRecord[]>(
-    `/api/chat/sessions/${sessionId}/messages`,
+    `/api/chat/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`,
     session,
   )
 }
@@ -34,11 +41,13 @@ export async function sendChatMessageStream({
   onError,
   onSession,
   patientId,
+  reasoningLevel,
   session,
   sessionId,
 }: {
   content: string
   patientId?: string
+  reasoningLevel: AiReasoningLevel
   session: Session | null
   sessionId?: string | null
   onDelta: (delta: string) => void
@@ -52,6 +61,7 @@ export async function sendChatMessageStream({
     body: JSON.stringify({
       content,
       patient_id: patientId,
+      reasoning_level: reasoningLevel,
       session_id: sessionId,
     }),
   }).catch(() => {
@@ -98,7 +108,9 @@ export async function sendChatMessageStream({
         onSession?.(payload.session_id)
       }
       if (event === 'error') {
-        onError?.(payload.detail ?? 'Erro ao chamar a IA.')
+        const message = payload.detail ?? 'Erro ao chamar a IA.'
+        onError?.(message)
+        throw new Error(message)
       }
       if (event === 'done') {
         onDone(payload)

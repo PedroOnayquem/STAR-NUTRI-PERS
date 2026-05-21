@@ -9,17 +9,20 @@ import {
   listChatSessions,
   sendChatMessageStream,
 } from '../services/chatService'
+import type { AiReasoningLevel } from '../types'
 
 export function useStarNutriChat({
   patientId,
+  reasoningLevel = 'medium',
   externalQueryKey,
 }: {
   patientId?: string
+  reasoningLevel?: AiReasoningLevel
   externalQueryKey?: unknown[]
 }) {
   const { profile, session } = useAuth()
   const queryClient = useQueryClient()
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [streaming, setStreaming] = useState('')
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessageRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -28,27 +31,37 @@ export function useStarNutriChat({
     () => ['chat-sessions', patientId ?? 'me'],
     [patientId],
   )
-  const messagesQueryKey = useMemo(
-    () => ['chat-messages', activeSessionId],
-    [activeSessionId],
+  const canUseChat = Boolean(
+    session && (profile?.role !== 'nutritionist' || patientId),
   )
 
   const sessionsQuery = useQuery({
     queryKey: sessionsQueryKey,
     queryFn: () => listChatSessions(session, patientId),
-    enabled: Boolean(session),
+    enabled: canUseChat,
   })
 
-  useEffect(() => {
-    if (!activeSessionId && sessionsQuery.data?.[0]?.id) {
-      setActiveSessionId(sessionsQuery.data[0].id)
+  const activeSessionId = useMemo(() => {
+    const sessions = sessionsQuery.data ?? []
+    if (
+      selectedSessionId &&
+      sessions.some((chatSession) => chatSession.id === selectedSessionId)
+    ) {
+      return selectedSessionId
     }
-  }, [activeSessionId, sessionsQuery.data])
+
+    return sessions[0]?.id ?? null
+  }, [selectedSessionId, sessionsQuery.data])
+
+  const messagesQueryKey = useMemo(
+    () => ['chat-messages', activeSessionId],
+    [activeSessionId],
+  )
 
   const messagesQuery = useQuery({
     queryKey: messagesQueryKey,
-    queryFn: () => listChatMessages(session, activeSessionId!),
-    enabled: Boolean(session && activeSessionId),
+    queryFn: () => listChatMessages(session, activeSessionId!, { limit: 120 }),
+    enabled: Boolean(canUseChat && activeSessionId),
   })
 
   useEffect(() => {
@@ -81,25 +94,39 @@ export function useStarNutriChat({
   }, [activeSessionId, externalQueryKey, queryClient, sessionsQueryKey, messagesQueryKey])
 
   const createSessionMutation = useMutation({
-    mutationFn: () =>
-      createChatSession(session, {
+    mutationFn: () => {
+      if (!canUseChat) {
+        throw new Error('Selecione um paciente para criar uma conversa.')
+      }
+
+      return createChatSession(session, {
         patientId,
         title: 'Nova conversa',
-      }),
+      })
+    },
     onSuccess: (created) => {
-      setActiveSessionId(created.id)
+      setError(null)
+      setSelectedSessionId(created.id)
       queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
       queryClient.invalidateQueries({ queryKey: ['chat-messages', created.id] })
       if (externalQueryKey) {
         queryClient.invalidateQueries({ queryKey: externalQueryKey })
       }
     },
+    onError: (caught) => {
+      setError(caught instanceof Error ? caught.message : 'Nao foi possivel criar a conversa.')
+    },
   })
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
+      if (!canUseChat) {
+        throw new Error('Selecione um paciente para iniciar o chat.')
+      }
+
       setError(null)
       setStreaming('')
+      let resolvedSessionId = activeSessionId
       const tempSessionId = activeSessionId || 'new'
       setPendingUserMessage({
         id: `pending-${Date.now()}`,
@@ -113,10 +140,12 @@ export function useStarNutriChat({
       await sendChatMessageStream({
         content,
         patientId,
+        reasoningLevel,
         session,
         sessionId: activeSessionId,
         onSession: (sessionId) => {
-          setActiveSessionId(sessionId)
+          resolvedSessionId = sessionId
+          setSelectedSessionId(sessionId)
           setPendingUserMessage((message) =>
             message ? { ...message, session_id: sessionId } : message,
           )
@@ -131,12 +160,18 @@ export function useStarNutriChat({
           setPendingUserMessage(null)
           setStreaming('')
           queryClient.invalidateQueries({ queryKey: sessionsQueryKey })
-          queryClient.invalidateQueries({ queryKey: ['chat-messages', activeSessionId] })
+          if (resolvedSessionId) {
+            queryClient.invalidateQueries({ queryKey: ['chat-messages', resolvedSessionId] })
+          }
           if (externalQueryKey) {
             queryClient.invalidateQueries({ queryKey: externalQueryKey })
           }
         },
       })
+
+      if (resolvedSessionId) {
+        queryClient.invalidateQueries({ queryKey: ['chat-messages', resolvedSessionId] })
+      }
     },
     onError: (caught) => {
       setError(caught instanceof Error ? caught.message : 'Erro ao chamar a IA.')
@@ -162,7 +197,7 @@ export function useStarNutriChat({
     error,
     isLoading: sessionsQuery.isLoading || messagesQuery.isLoading,
     messages,
-    selectSession: setActiveSessionId,
+    selectSession: setSelectedSessionId,
     sendMessage: (content: string) => sendMutation.mutate(content),
     sending: sendMutation.isPending,
     sessions: sessionsQuery.data ?? [],

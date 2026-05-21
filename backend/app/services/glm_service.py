@@ -9,6 +9,14 @@ from fastapi import HTTPException, status
 from ..core.config import settings
 
 
+GENERATION_SETTINGS = {
+    "low": {"max_tokens": 700, "temperature": 0.2},
+    "medium": {"max_tokens": 1200, "temperature": 0.3},
+    "high": {"max_tokens": 1800, "temperature": 0.25},
+    "ultra": {"max_tokens": 2600, "temperature": 0.2},
+}
+
+
 class GlmService:
     def __init__(self) -> None:
         if not settings.glm_api_key:
@@ -29,8 +37,13 @@ class GlmService:
         *,
         system_prompt: str,
         history: list[dict[str, str]],
+        reasoning_level: str,
         user_message: str,
     ) -> AsyncIterator[str]:
+        generation = GENERATION_SETTINGS.get(
+            reasoning_level,
+            GENERATION_SETTINGS["medium"],
+        )
         payload = {
             "model": self.model,
             "messages": [
@@ -39,7 +52,8 @@ class GlmService:
                 {"role": "user", "content": user_message},
             ],
             "stream": True,
-            "temperature": 0.3,
+            "temperature": generation["temperature"],
+            "max_tokens": generation["max_tokens"],
         }
 
         headers = {

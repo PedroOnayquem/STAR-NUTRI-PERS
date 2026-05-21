@@ -7,6 +7,50 @@ from fastapi import HTTPException, status
 from .supabase_workspace_service import SupabaseWorkspaceService
 
 
+REASONING_SETTINGS = {
+    "low": {
+        "label": "Pensamento Baixo",
+        "history_limit": 6,
+        "metric_limit": 12,
+        "condition_limit": 10,
+        "instruction": (
+            "Responda de forma rapida, direta e objetiva. Priorize apenas o "
+            "essencial e evite analises longas."
+        ),
+    },
+    "medium": {
+        "label": "Pensamento Medio",
+        "history_limit": 12,
+        "metric_limit": 30,
+        "condition_limit": 20,
+        "instruction": (
+            "Equilibre objetividade com uma explicacao suficiente para tomada "
+            "de decisao segura."
+        ),
+    },
+    "high": {
+        "label": "Pensamento Alto",
+        "history_limit": 20,
+        "metric_limit": 60,
+        "condition_limit": 40,
+        "instruction": (
+            "Analise o caso com mais profundidade, conectando dieta, treino, "
+            "metricas, aderencia e pontos de atencao."
+        ),
+    },
+    "ultra": {
+        "label": "Pensamento Altissimo",
+        "history_limit": 32,
+        "metric_limit": 120,
+        "condition_limit": 80,
+        "instruction": (
+            "Faca uma analise profunda, estruturada e criteriosa. Explique "
+            "hipoteses, limites, riscos e proximos pontos a observar."
+        ),
+    },
+}
+
+
 class ChatContextService:
     def __init__(self, workspace: SupabaseWorkspaceService) -> None:
         self.workspace = workspace
@@ -44,7 +88,9 @@ class ChatContextService:
         context: dict,
         user_message: str,
         history: list[dict[str, str]],
+        reasoning_level: str,
     ) -> str:
+        settings = self.get_reasoning_settings(reasoning_level)
         patient = context["patient"]
         profile = context["profile"] or {}
         active_diet = next(
@@ -64,9 +110,12 @@ class ChatContextService:
                 "genero": patient.get("gender"),
                 "nascimento": patient.get("birth_date"),
             },
-            "condicoes_clinicas": context["conditions"],
+            "nivel_de_inteligencia": settings["label"],
+            "condicoes_clinicas": context["conditions"][: settings["condition_limit"]],
             "metricas_principais": context["main_metrics"],
-            "metricas_variaveis_recentes": context["variable_metrics"][:30],
+            "metricas_variaveis_recentes": context["variable_metrics"][
+                : settings["metric_limit"]
+            ],
             "dieta_ativa": active_diet,
             "treino_ativo": active_workout,
         }
@@ -86,6 +135,8 @@ class ChatContextService:
             "- Você sempre considera os dados reais cadastrados.\n"
             "- Você responde com segurança, clareza e responsabilidade.\n"
             "- Quando houver risco à saúde, oriente procurar atendimento profissional.\n\n"
+            "Nivel de raciocinio solicitado:\n"
+            f"{settings['label']} - {settings['instruction']}\n\n"
             "Contexto do paciente:\n"
             f"{json.dumps(clinical_context, ensure_ascii=False, default=str)}\n\n"
             "Histórico recente da conversa:\n"
@@ -94,6 +145,9 @@ class ChatContextService:
             f"{user_message}\n\n"
             "Responda de forma útil, objetiva e profissional."
         )
+
+    def get_reasoning_settings(self, reasoning_level: str) -> dict:
+        return REASONING_SETTINGS.get(reasoning_level, REASONING_SETTINGS["medium"])
 
     def build_history(self, context: dict, session_id: str) -> list[dict[str, str]]:
         messages = [
@@ -109,6 +163,27 @@ class ChatContextService:
                 role = "assistant"
             else:
                 role = "user"
+            history.append({"role": role, "content": message.get("content", "")})
+
+        return history
+
+    def build_history_from_messages(
+        self,
+        messages: list[dict],
+        *,
+        exclude_message_id: str | None = None,
+        limit: int = 12,
+    ) -> list[dict[str, str]]:
+        scoped_messages = [
+            message
+            for message in messages
+            if not exclude_message_id or message.get("id") != exclude_message_id
+        ][-limit:]
+
+        history: list[dict[str, str]] = []
+        for message in scoped_messages:
+            sender = message.get("sender")
+            role = "assistant" if sender == "ai" else "user"
             history.append({"role": role, "content": message.get("content", "")})
 
         return history
