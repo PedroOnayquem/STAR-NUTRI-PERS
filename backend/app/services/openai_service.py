@@ -17,20 +17,17 @@ GENERATION_SETTINGS = {
 }
 
 
-class GlmService:
+class OpenAIChatService:
     def __init__(self) -> None:
-        if not settings.glm_api_key:
+        if not settings.openai_api_key:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="GLM_API_KEY nao configurada no backend/.env.",
+                detail="OPENAI_API_KEY nao configurada no backend/.env.",
             )
 
-        self.api_key = settings.glm_api_key
-        self.base_url = (
-            settings.glm_base_url
-            or "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-        )
-        self.model = settings.glm_model or "glm-5"
+        self.api_key = settings.openai_api_key
+        self.base_url = settings.openai_base_url
+        self.model = settings.openai_model
 
     async def stream_chat(
         self,
@@ -47,13 +44,13 @@ class GlmService:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
+                {"role": "developer", "content": system_prompt},
                 *history,
                 {"role": "user", "content": user_message},
             ],
             "stream": True,
             "temperature": generation["temperature"],
-            "max_tokens": generation["max_tokens"],
+            "max_completion_tokens": generation["max_tokens"],
         }
 
         headers = {
@@ -73,7 +70,7 @@ class GlmService:
                         body = await response.aread()
                         raise HTTPException(
                             status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail=f"GLM rejeitou a requisicao: {body.decode(errors='ignore')}",
+                            detail=f"OpenAI rejeitou a requisicao: {body.decode(errors='ignore')}",
                         )
 
                     async for line in response.aiter_lines():
@@ -101,5 +98,5 @@ class GlmService:
         except httpx.RequestError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel conectar ao GLM 5.0.",
+                detail="Nao foi possivel conectar a OpenAI.",
             ) from None

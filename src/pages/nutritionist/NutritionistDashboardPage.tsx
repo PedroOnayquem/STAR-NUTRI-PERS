@@ -44,7 +44,7 @@ export function NutritionistDashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard caption="ativos no workspace" icon={<Users size={20} />} label="Pacientes" value={activePatients.length} />
         <StatCard caption="cadastros totais" icon={<ClipboardList size={20} />} label="Registros" value={patients.length} />
-        <StatCard caption="via backend seguro" icon={<Bot size={20} />} label="Chat IA" value="GLM 5" />
+        <StatCard caption="via backend seguro" icon={<Bot size={20} />} label="Chat IA" value="ChatGPT" />
         <StatCard caption="dados em tempo real" icon={<Activity size={20} />} label="Supabase" value="RLS" />
       </div>
 
@@ -107,7 +107,7 @@ export function NutritionistDashboardPage() {
           <div className="mt-5 space-y-3 text-sm text-slate-600 dark:text-slate-300">
             <p>Pacientes sao criados pelo backend com Supabase Auth.</p>
             <p>Dietas, treinos, metricas e condicoes usam RLS do Supabase.</p>
-            <p>O chat monta contexto completo no backend antes de chamar o GLM.</p>
+            <p>O chat monta contexto completo no backend antes de chamar o ChatGPT.</p>
           </div>
         </Card>
       </div>

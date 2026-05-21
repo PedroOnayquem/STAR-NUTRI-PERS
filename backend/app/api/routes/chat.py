@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from ...schemas.chat import CreateChatSessionRequest, SendChatMessageRequest
 from ...services.chat_context_service import ChatContextService
-from ...services.glm_service import GlmService
+from ...services.openai_service import OpenAIChatService
 from ...services.supabase_workspace_service import SupabaseWorkspaceService
 from .admin import get_bearer_token
 
@@ -93,14 +93,14 @@ async def send_chat_message(
         history,
         payload.reasoning_level,
     )
-    glm = GlmService()
+    ai_service = OpenAIChatService()
 
     async def event_stream():
         answer = ""
         yield _event("session", {"session_id": session["id"]})
 
         try:
-            async for delta in glm.stream_chat(
+            async for delta in ai_service.stream_chat(
                 system_prompt=system_prompt,
                 history=history,
                 reasoning_level=payload.reasoning_level,
@@ -114,9 +114,9 @@ async def send_chat_message(
                 "ai",
                 answer.strip(),
                 {
-                    "model": glm.model,
+                    "model": ai_service.model,
                     "reasoning_level": payload.reasoning_level,
-                    "source": "glm",
+                    "source": "openai",
                 },
             )
             yield _event("done", {"message": saved})

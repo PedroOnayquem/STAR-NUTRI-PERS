@@ -28,9 +28,12 @@ class Settings:
     frontend_origins: list[str] = parse_frontend_origins()
     supabase_url: str | None = getenv("SUPABASE_URL")
     supabase_service_role_key: str | None = getenv("SUPABASE_SERVICE_ROLE_KEY")
-    glm_api_key: str | None = getenv("GLM_API_KEY")
-    glm_base_url: str | None = getenv("GLM_BASE_URL")
-    glm_model: str = getenv("GLM_MODEL", "glm-5.0")
+    openai_api_key: str | None = getenv("OPENAI_API_KEY")
+    openai_base_url: str = getenv(
+        "OPENAI_BASE_URL",
+        "https://api.openai.com/v1/chat/completions",
+    )
+    openai_model: str = getenv("OPENAI_MODEL", "chat-latest")
 
 
 @lru_cache

@@ -27,7 +27,7 @@ export function buildPatientAiContext(context: PatientAiContext) {
     : 'Sem treino ativo cadastrado.'
 
   return {
-    model: 'GLM 5.0',
+    model: 'ChatGPT',
     systemPrompt: [
       'Voce e um assistente de acompanhamento nutricional.',
       'Voce nao substitui o nutricionista nem um medico.',

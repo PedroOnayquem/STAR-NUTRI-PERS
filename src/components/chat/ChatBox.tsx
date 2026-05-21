@@ -92,7 +92,7 @@ export function ChatBox({
               <Bot size={20} />
             </div>
             <div>
-              <h3 className="font-bold">Chat IA GLM 5.0</h3>
+              <h3 className="font-bold">Chat IA ChatGPT</h3>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Respostas limitadas ao plano cadastrado
               </p>

@@ -16,7 +16,7 @@ Backend FastAPI
         |
         | service role somente no servidor
         v
-Camada de IA GLM 5.0
+Camada de IA ChatGPT
 ```
 
 Responsabilidades principais:
@@ -24,7 +24,7 @@ Responsabilidades principais:
 - Frontend: experiencia do usuario, formularios, dashboards, chat, navegacao e estados locais.
 - Supabase: autenticacao, banco Postgres, RLS, realtime, storage e auditoria.
 - Backend FastAPI: regras sensiveis, integracoes protegidas, orquestracao do chat IA, logs e validacoes server-side.
-- Camada de IA: montagem de contexto clinico, politicas de seguranca, chamada ao GLM 5.0 e persistencia das respostas.
+- Camada de IA: montagem de contexto clinico, politicas de seguranca, chamada ao ChatGPT e persistencia das respostas.
 
 ## 2. Estrutura de Pastas do Frontend
 
@@ -232,7 +232,7 @@ backend/
       metric_service.py
       chat_service.py
       ai_context_service.py
-      glm_service.py
+      openai_service.py
       audit_service.py
 
     repositories/
@@ -459,7 +459,7 @@ Backend:
   - Orquestrar IA.
   - Aplicar validacoes sensiveis.
   - Escrever logs de auditoria.
-  - Proteger chamadas ao GLM 5.0.
+  - Proteger chamadas ao ChatGPT.
 
 Variaveis:
 
@@ -472,9 +472,9 @@ VITE_API_BASE_URL
 Backend:
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
-GLM_API_KEY
-GLM_BASE_URL
-GLM_MODEL
+OPENAI_API_KEY
+OPENAI_BASE_URL
+OPENAI_MODEL
 ```
 
 ## 10. Estrategia de Seguranca
@@ -537,7 +537,7 @@ Implementacao:
 - `patients.user_id` limita escopo do paciente.
 - Policies RLS devem refletir essas relacoes.
 
-## 12. Fluxo Completo do Chat com IA GLM 5.0
+## 12. Fluxo Completo do Chat com IA ChatGPT
 
 Fluxo:
 
@@ -568,7 +568,7 @@ Authorization: Bearer <supabase_jwt>
    - Doencas, alergias, restricoes, lesoes, medicamentos.
    - Historico recente da conversa.
 8. Backend monta prompt seguro.
-9. Backend chama GLM 5.0.
+9. Backend chama ChatGPT.
 10. Backend valida resposta:
     - Nao prescreve nova dieta.
     - Nao altera treino.
@@ -612,7 +612,7 @@ Quando faltar dado, diga que o nutricionista precisa avaliar.
 ```text
 backend/app/services/
   ai_context_service.py
-  glm_service.py
+  openai_service.py
   chat_service.py
 
 backend/app/policies/
@@ -622,7 +622,7 @@ backend/app/policies/
 Responsabilidades:
 
 - `ai_context_service`: busca e normaliza dados do paciente.
-- `glm_service`: encapsula chamada ao GLM 5.0.
+- `openai_service`: encapsula chamada ao ChatGPT pela API da OpenAI.
 - `chat_service`: salva mensagens, chama IA e retorna resposta.
 - `chat_policy`: bloqueia pedidos inseguros e valida escopo.
 
@@ -923,7 +923,7 @@ Longo prazo:
 3. Implementar rotas protegidas por perfil.
 4. Gerar tipos do Supabase.
 5. Criar services reais para patients, diets, workouts e metrics.
-6. Implementar backend do chat GLM 5.0.
+6. Implementar backend do chat ChatGPT.
 7. Ativar realtime em chat e metricas.
 8. Criar testes de permissao.
 9. Implementar auditoria.

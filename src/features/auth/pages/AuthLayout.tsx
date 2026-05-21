@@ -57,7 +57,7 @@ export function AuthLayout({
             {[
               { icon: <ShieldCheck size={18} />, label: 'RLS e perfis' },
               { icon: <Activity size={18} />, label: 'Metricas vivas' },
-              { icon: <Bot size={18} />, label: 'GLM 5.0 ready' },
+              { icon: <Bot size={18} />, label: 'ChatGPT ready' },
             ].map((item) => (
               <div
                 className="rounded-2xl border border-white/10 bg-white/[0.06] p-4 shadow-2xl shadow-black/20 backdrop-blur"
