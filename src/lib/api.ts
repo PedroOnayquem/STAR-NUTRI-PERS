@@ -1,8 +1,9 @@
 import type { Session } from '@supabase/supabase-js'
-
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined
+import { getAppConfig } from './runtimeConfig'
 
 export function requireApiBaseUrl() {
+  const apiBaseUrl = getAppConfig('VITE_API_BASE_URL')
+
   if (!apiBaseUrl) {
     throw new Error('VITE_API_BASE_URL nao configurado.')
   }
@@ -34,7 +35,7 @@ export async function apiRequest<T>(
     },
   }).catch(() => {
     throw new Error(
-      `Nao foi possivel conectar ao backend em ${requireApiBaseUrl()}. Rode npm run dev:api e mantenha a API aberta na porta 8000.`,
+      `Nao foi possivel conectar ao backend em ${requireApiBaseUrl()}. Verifique se a API do Star Nutri esta no ar.`,
     )
   })
 

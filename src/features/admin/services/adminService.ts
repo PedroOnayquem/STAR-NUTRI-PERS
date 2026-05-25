@@ -1,6 +1,5 @@
 import type { Session } from '@supabase/supabase-js'
-
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined
+import { requireApiBaseUrl } from '../../../lib/api'
 
 export type CreateNutritionistInput = {
   fullName: string
@@ -23,9 +22,7 @@ export async function createNutritionist(
   input: CreateNutritionistInput,
   session: Session | null,
 ) {
-  if (!apiBaseUrl) {
-    throw new Error('VITE_API_BASE_URL nao configurado.')
-  }
+  const apiBaseUrl = requireApiBaseUrl()
 
   if (!session?.access_token) {
     throw new Error('Sessao de admin nao encontrada.')
@@ -51,7 +48,7 @@ export async function createNutritionist(
     })
   } catch {
     throw new Error(
-      `Nao foi possivel conectar ao backend em ${apiBaseUrl}. Rode npm run dev:api e mantenha a API aberta na porta 8000.`,
+      `Nao foi possivel conectar ao backend em ${apiBaseUrl}. Verifique se a API do Star Nutri esta no ar.`,
     )
   }
 
