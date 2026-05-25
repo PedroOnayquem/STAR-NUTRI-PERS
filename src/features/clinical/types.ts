@@ -49,7 +49,12 @@ export type HealthConditionRecord = {
   condition_type: HealthConditionType
   title: string
   description: string
+  injury_local: string | null
+  notes: string | null
+  origin: string | null
+  recommendations: string | null
   severity: string | null
+  started_at: string | null
   created_at?: string | null
 }
 
