@@ -256,7 +256,12 @@ export async function createHealthCondition(payload: {
   condition_type: HealthConditionRecord['condition_type']
   title: string
   description: string
+  injury_local?: string | null
+  notes?: string | null
+  origin?: string | null
+  recommendations?: string | null
   severity?: string | null
+  started_at?: string | null
 }) {
   const client = getClient()
   const { data, error } = await client

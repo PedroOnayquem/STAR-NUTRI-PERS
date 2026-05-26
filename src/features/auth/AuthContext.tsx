@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
@@ -31,20 +32,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [profileLoading, setProfileLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const profileCacheRef = useRef(new Map<string, AuthProfile | null>())
+  const profileRequestRef = useRef<{
+    promise: Promise<AuthProfile | null>
+    userId: string
+  } | null>(null)
   const requiresPasswordChange = needsPasswordChange(session?.user)
 
-  const loadProfile = useCallback(async (nextSession: Session | null) => {
+  const loadProfile = useCallback(async (
+    nextSession: Session | null,
+    options?: { force?: boolean },
+  ) => {
     if (!nextSession?.user) {
       setProfile(null)
       return null
     }
 
+    const userId = nextSession.user.id
+    if (!options?.force && profileCacheRef.current.has(userId)) {
+      const cached = profileCacheRef.current.get(userId) ?? null
+      setProfile(cached)
+      return cached
+    }
+
+    const currentRequest = profileRequestRef.current
+    if (!options?.force && currentRequest?.userId === userId) {
+      const cached = await currentRequest.promise
+      setProfile(cached)
+      return cached
+    }
+
     setProfileLoading(true)
+    const request = getCurrentProfile(userId).then((nextProfile) => {
+      profileCacheRef.current.set(userId, nextProfile)
+      return nextProfile
+    })
+    profileRequestRef.current = { promise: request, userId }
     try {
-      const nextProfile = await getCurrentProfile(nextSession.user.id)
+      const nextProfile = await request
       setProfile(nextProfile)
       return nextProfile
     } finally {
+      if (profileRequestRef.current?.promise === request) {
+        profileRequestRef.current = null
+      }
       setProfileLoading(false)
     }
   }, [])
@@ -126,12 +157,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     setError(null)
     await signOut()
+    profileCacheRef.current.clear()
     setSession(null)
     setProfile(null)
   }, [])
 
   const refreshProfile = useCallback(async () => {
-    return loadProfile(session)
+    return loadProfile(session, { force: true })
   }, [loadProfile, session])
 
   const value = useMemo<AuthContextValue>(
@@ -150,17 +182,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshProfile,
     }),
     [
+      changePassword,
       error,
       loading,
-      changePassword,
       login,
       logout,
       profile,
       profileLoading,
-      requiresPasswordChange,
-      session,
       recoverPassword,
       refreshProfile,
+      requiresPasswordChange,
+      session,
     ],
   )
 

@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { Activity, Bot, Moon, ShieldCheck, Sparkles, Sun } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Button } from '../../../components/ui/Button'
@@ -34,12 +33,7 @@ export function AuthLayout({
             </Button>
           </div>
 
-          <motion.div
-            animate={{ opacity: 1, y: 0 }}
-            className="relative z-10 max-w-2xl"
-            initial={{ opacity: 0, y: 18 }}
-            transition={{ duration: 0.55, ease: 'easeOut' }}
-          >
+          <div className="relative z-10 max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-sm font-bold text-emerald-200 shadow-2xl shadow-emerald-950/40 backdrop-blur">
               <Sparkles size={14} />
               Health tech SaaS com IA
@@ -51,7 +45,7 @@ export function AuthLayout({
               Uma experiencia premium para nutricionistas gerirem pacientes,
               planos, metricas e acompanhamento com IA de forma segura.
             </p>
-          </motion.div>
+          </div>
 
           <div className="relative z-10 grid gap-3 xl:grid-cols-3">
             {[
@@ -83,17 +77,12 @@ export function AuthLayout({
               {isDark ? <Sun size={18} /> : <Moon size={18} />}
             </Button>
           </div>
-          <motion.div
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            className="w-full max-w-md"
-            initial={{ opacity: 0, scale: 0.98, y: 14 }}
-            transition={{ duration: 0.45, ease: 'easeOut' }}
-          >
+          <div className="w-full max-w-md">
             <div className="mb-8 flex justify-center lg:hidden">
               <Brand dark />
             </div>
             {children}
-          </motion.div>
+          </div>
         </section>
       </div>
     </main>

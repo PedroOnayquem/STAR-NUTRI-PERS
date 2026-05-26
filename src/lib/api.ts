@@ -27,6 +27,8 @@ export async function apiRequest<T>(
   session: Session | null,
   init?: RequestInit,
 ) {
+  const startedAt = performance.now()
+  const method = init?.method ?? 'GET'
   const response = await fetch(`${requireApiBaseUrl()}${path}`, {
     ...init,
     headers: {
@@ -38,6 +40,10 @@ export async function apiRequest<T>(
       `Nao foi possivel conectar ao backend em ${requireApiBaseUrl()}. Verifique se a API do Star Nutri esta no ar.`,
     )
   })
+  const elapsed = performance.now() - startedAt
+  if (import.meta.env.DEV && elapsed > 450) {
+    console.debug(`[perf:api] ${method} ${path} ${Math.round(elapsed)}ms`)
+  }
 
   const body = await response.json().catch(() => null)
 

@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Activity,
@@ -22,22 +21,22 @@ import { Badge } from '../ui/Badge'
 
 const navByRole = {
   admin: [
-    { to: '/admin', label: 'Command center', icon: <Shield size={18} /> },
-    { to: '/admin/users', label: 'Usuarios', icon: <Users size={18} /> },
+    { to: '/admin', label: 'Command center', icon: <Shield size={18} />, preload: () => import('../../pages/AdminPage') },
+    { to: '/admin/users', label: 'Usuarios', icon: <Users size={18} />, preload: () => import('../../pages/AdminPage') },
   ],
   nutritionist: [
-    { to: '/nutritionist', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
-    { to: '/nutritionist/patients', label: 'Pacientes', icon: <Users size={18} /> },
-    { to: '/nutritionist/chat', label: 'Chat IA', icon: <Bot size={18} /> },
+    { to: '/nutritionist', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/nutritionist/NutritionistDashboardPage') },
+    { to: '/nutritionist/patients', label: 'Pacientes', icon: <Users size={18} />, preload: () => import('../../pages/nutritionist/PatientsPage') },
+    { to: '/nutritionist/chat', label: 'Chat IA', icon: <Bot size={18} />, preload: () => import('../../pages/nutritionist/NutritionistChatPage') },
   ],
   patient: [
-    { to: '/patient', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
-    { to: '/patient/diet', label: 'Minha dieta', icon: <Activity size={18} /> },
-    { to: '/patient/workout', label: 'Meu treino', icon: <Activity size={18} /> },
-    { to: '/patient/metrics', label: 'Metricas', icon: <Activity size={18} /> },
-    { to: '/patient/evolution', label: 'Evolucao', icon: <Activity size={18} /> },
-    { to: '/patient/chat', label: 'Chat IA', icon: <Bot size={18} /> },
-    { to: '/patient/profile', label: 'Perfil', icon: <UserRound size={18} /> },
+    { to: '/patient', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/diet', label: 'Minha dieta', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/workout', label: 'Meu treino', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/metrics', label: 'Metricas', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/evolution', label: 'Evolucao', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/chat', label: 'Chat IA', icon: <Bot size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/profile', label: 'Perfil', icon: <UserRound size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
   ],
 }
 
@@ -81,6 +80,7 @@ export function AuthenticatedLayout({
               icon={item.icon}
               key={item.to}
               label={item.label}
+              onPreload={item.preload}
               to={item.to}
             />
           ))}
@@ -129,6 +129,8 @@ export function AuthenticatedLayout({
                     : 'bg-white text-slate-700 shadow-sm dark:bg-white/10 dark:text-slate-200',
                 )}
                 key={item.to}
+                onFocus={item.preload}
+                onMouseEnter={item.preload}
                 to={item.to}
               >
                 {item.icon}
@@ -138,14 +140,9 @@ export function AuthenticatedLayout({
           </div>
         </header>
 
-        <motion.main
-          animate={{ opacity: 1, y: 0 }}
-          className="px-4 py-6 sm:px-6 lg:px-8"
-          initial={{ opacity: 0, y: 10 }}
-          transition={{ duration: 0.3, ease: 'easeOut' }}
-        >
+        <main className="px-4 py-6 sm:px-6 lg:px-8">
           <Outlet />
-        </motion.main>
+        </main>
       </div>
     </div>
   )
@@ -181,11 +178,13 @@ function NavLink({
   active,
   icon,
   label,
+  onPreload,
   to,
 }: {
   active: boolean
   icon: ReactNode
   label: string
+  onPreload?: () => Promise<unknown>
   to: string
 }) {
   return (
@@ -196,6 +195,8 @@ function NavLink({
           ? 'bg-slate-950 text-white shadow-[0_16px_42px_rgba(15,23,42,0.22)] dark:bg-white dark:text-slate-950'
           : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white',
       )}
+      onFocus={onPreload}
+      onMouseEnter={onPreload}
       to={to}
     >
       <span className="flex items-center gap-3">

@@ -288,6 +288,7 @@ async def _stream_chat_response(
                     "scope": chat_scope,
                     "source": "openai",
                 },
+                touch_chat=False,
             )
             yield _event("done", {"message": saved})
         except Exception as exc:
@@ -302,13 +303,21 @@ def _event(event: str, data: dict) -> str:
 
 def _with_agent_actions(system_prompt: str, actions: list[dict]) -> str:
     if not actions:
-        return system_prompt
+        return (
+            f"{system_prompt}\n\n"
+            "Nenhuma tool operacional foi executada antes desta resposta. "
+            "Nao diga que cadastrou, salvou, atualizou, marcou ou executou qualquer acao. "
+            "Se o usuario pediu uma acao de cadastro/alteracao e nenhuma tool foi executada, "
+            "explique objetivamente que a acao nao foi concluida e solicite os dados necessarios."
+        )
 
     return (
         f"{system_prompt}\n\n"
         "Acoes operacionais avaliadas antes desta resposta:\n"
         f"{json.dumps(actions, ensure_ascii=False, default=str)}\n\n"
-        "Ao responder, informe de forma objetiva as acoes executadas, ignoradas, "
-        "falhas ou pendentes de confirmacao. Nao prometa que uma acao foi feita se "
-        "o status nao for executed."
+        "Ao responder, use apenas o resultado real acima. Informe sucesso somente quando "
+        "success=true e status=executed. Para status failed/skipped, diga que a acao nao foi "
+        "concluida e mostre o motivo em error/summary. Se houver result.pending_observation, "
+        "pergunte se o usuario deseja adicionar essa observacao; a proxima resposta curta "
+        "deve confirmar somente essa pending_action."
     )

@@ -9,3 +9,11 @@ class UpdatePatientRequest(BaseModel):
     objective: str | None = Field(default=None, max_length=240)
     notes: str | None = Field(default=None, max_length=1000)
     is_active: bool | None = None
+
+
+class UpdateMyPatientProfileRequest(BaseModel):
+    full_name: str | None = Field(default=None, min_length=3, max_length=120)
+    phone: str | None = Field(default=None, max_length=40)
+    birth_date: str | None = None
+    gender: str | None = Field(default=None, max_length=40)
+    objective: str | None = Field(default=None, max_length=240)

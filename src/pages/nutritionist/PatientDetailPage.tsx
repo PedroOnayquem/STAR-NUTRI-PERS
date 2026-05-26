@@ -159,7 +159,7 @@ function OverviewTab({ context }: { context: PatientContext }) {
             <p className="text-sm text-slate-500 dark:text-slate-400">Nenhuma condicao cadastrada.</p>
           ) : (
             context.conditions.slice(0, 5).map((condition) => (
-              <Badge key={condition.id} tone="amber">{condition.title}</Badge>
+              <Badge key={condition.id} tone="amber">{conditionDisplayTitle(condition)}</Badge>
             ))
           )}
         </div>
@@ -508,14 +508,33 @@ function MetricsTab({ context, queryKey }: { context: PatientContext; queryKey: 
 
 function ConditionsTab({ context, queryKey }: { context: PatientContext; queryKey: unknown[] }) {
   const queryClient = useQueryClient()
-  const [form, setForm] = useState<{ condition_type: HealthConditionRecord['condition_type']; title: string; description: string; severity: string }>({
+  const [form, setForm] = useState<{
+    condition_type: HealthConditionRecord['condition_type']
+    description: string
+    injury_local: string
+    severity: string
+    title: string
+  }>({
     condition_type: 'observation',
+    injury_local: '',
     title: '',
     description: '',
     severity: '',
   })
   const invalidate = () => queryClient.invalidateQueries({ queryKey })
-  const mutation = useMutation({ mutationFn: () => createHealthCondition({ patient_id: context.patient.id, ...form }), onSuccess: invalidate })
+  const mutation = useMutation({
+    mutationFn: () => createHealthCondition({
+      patient_id: context.patient.id,
+      condition_type: form.condition_type,
+      description: form.description,
+      injury_local: form.condition_type === 'injury' ? nullable(form.injury_local) : null,
+      severity: nullable(form.severity),
+      title: form.condition_type === 'injury' && form.injury_local.trim()
+        ? `Lesao - ${form.injury_local.trim()}`
+        : form.title,
+    }),
+    onSuccess: invalidate,
+  })
 
   return (
     <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
@@ -531,10 +550,13 @@ function ConditionsTab({ context, queryKey }: { context: PatientContext; queryKe
             <option value="intolerance">Intolerancia</option>
             <option value="observation">Observacao</option>
           </select>
+          {form.condition_type === 'injury' && (
+            <Input placeholder="Local da lesao" value={form.injury_local} onChange={(event) => setForm({ ...form, injury_local: event.target.value })} />
+          )}
           <Input placeholder="Titulo" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
           <Textarea placeholder="Descricao" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           <Input placeholder="Severidade" value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })} />
-          <Button disabled={!form.title || !form.description || mutation.isPending} onClick={() => mutation.mutate()} variant="premium">Adicionar</Button>
+          <Button disabled={!(form.title || form.injury_local) || !form.description || mutation.isPending} onClick={() => mutation.mutate()} variant="premium">Adicionar</Button>
         </div>
       </Card>
       <div className="grid gap-3 md:grid-cols-2">
@@ -542,9 +564,24 @@ function ConditionsTab({ context, queryKey }: { context: PatientContext; queryKe
           <Card className="p-4" key={condition.id}>
             <div className="flex justify-between gap-3">
               <div>
-                <Badge tone="amber">{condition.condition_type}</Badge>
-                <h3 className="mt-3 font-black">{condition.title}</h3>
+                <Badge tone="amber">{conditionTypeLabel(condition.condition_type)}</Badge>
+                <h3 className="mt-3 font-black">{conditionDisplayTitle(condition)}</h3>
                 <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{condition.description}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  {condition.severity && <span>Gravidade: {condition.severity}</span>}
+                  {condition.started_at && <span>Inicio: {formatDate(condition.started_at)}</span>}
+                  {condition.origin && <span>Origem: {condition.origin}</span>}
+                </div>
+                {condition.notes && (
+                  <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    Obs.: {condition.notes}
+                  </p>
+                )}
+                {condition.recommendations && (
+                  <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    Recomendacoes: {condition.recommendations}
+                  </p>
+                )}
               </div>
               <button onClick={() => deleteHealthCondition(condition.id).then(invalidate)} type="button"><Trash2 size={16} /></button>
             </div>
@@ -575,6 +612,37 @@ function Mini({ label, value }: { label: string; value: string | number }) {
 
 function ErrorText({ children }: { children: ReactNode }) {
   return <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-semibold text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-300">{children}</p>
+}
+
+function conditionTypeLabel(type: HealthConditionRecord['condition_type']) {
+  const labels: Record<HealthConditionRecord['condition_type'], string> = {
+    allergy: 'Alergia',
+    disease: 'Doenca',
+    food_restriction: 'Restricao alimentar',
+    injury: 'Lesao',
+    intolerance: 'Intolerancia',
+    medication: 'Medicacao',
+    observation: 'Observacao',
+  }
+  return labels[type]
+}
+
+function conditionDisplayTitle(condition: HealthConditionRecord) {
+  if (condition.condition_type === 'injury') {
+    return condition.injury_local
+      ? `Lesao - ${condition.injury_local}`
+      : condition.title
+  }
+  return condition.title
+}
+
+function formatDate(value: string) {
+  return new Date(`${value}T00:00:00`).toLocaleDateString('pt-BR')
+}
+
+function nullable(value: string) {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
 }
 
 function numberOrNull(value: string) {

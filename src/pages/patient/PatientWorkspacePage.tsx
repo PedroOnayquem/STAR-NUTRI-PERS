@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -29,7 +29,10 @@ import { StatCard } from '../../components/ui/StatCard'
 import { ChatExperience } from '../../features/chat/components/ChatExperience'
 import { useAuth } from '../../features/auth/useAuth'
 import { createVariableMetric } from '../../features/clinical/services/clinicalDataService'
-import { getPatientContext } from '../../features/clinical/services/workspaceService'
+import {
+  getPatientContext,
+  updateMyPatientProfile,
+} from '../../features/clinical/services/workspaceService'
 import type { PatientContext } from '../../features/clinical/types'
 
 export function PatientWorkspacePage({
@@ -74,7 +77,7 @@ export function PatientWorkspacePage({
           scope="patient"
         />
       )}
-      {view === 'profile' && <Profile context={context} />}
+      {view === 'profile' && <Profile context={context} queryKey={queryKey} />}
     </div>
   )
 }
@@ -249,18 +252,143 @@ function Evolution({ context, compact = false }: { context: PatientContext; comp
   )
 }
 
-function Profile({ context }: { context: PatientContext }) {
+function Profile({ context, queryKey }: { context: PatientContext; queryKey: unknown[] }) {
+  const { session } = useAuth()
+  const queryClient = useQueryClient()
+  const [saved, setSaved] = useState(false)
+  const [form, setForm] = useState(() => ({
+    birth_date: context.patient.birth_date ?? '',
+    full_name: context.profile?.full_name ?? '',
+    gender: context.patient.gender ?? '',
+    objective: context.patient.objective ?? '',
+    phone: context.profile?.phone ?? '',
+  }))
+
+  useEffect(() => {
+    setForm({
+      birth_date: context.patient.birth_date ?? '',
+      full_name: context.profile?.full_name ?? '',
+      gender: context.patient.gender ?? '',
+      objective: context.patient.objective ?? '',
+      phone: context.profile?.phone ?? '',
+    })
+  }, [context.patient, context.profile])
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      updateMyPatientProfile(session, {
+        birth_date: nullable(form.birth_date),
+        full_name: form.full_name.trim(),
+        gender: nullable(form.gender),
+        objective: nullable(form.objective),
+        phone: nullable(form.phone),
+      }),
+    onSuccess: () => {
+      setSaved(true)
+      queryClient.invalidateQueries({ queryKey })
+      window.setTimeout(() => setSaved(false), 2400)
+    },
+  })
+
   return (
     <Card className="p-5">
-      <h2 className="font-black">Meu perfil</h2>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <MiniStatus label="Nome" value={context.profile?.full_name ?? '-'} />
-        <MiniStatus label="Email" value={context.profile?.email ?? '-'} />
-        <MiniStatus label="Objetivo" value={context.patient.objective ?? '-'} />
-        <MiniStatus label="Nutricionista" value={context.nutritionist?.specialty ?? 'Star Nutri'} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-black">Meu perfil</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Mantenha seus dados basicos atualizados.
+          </p>
+        </div>
+        <Button
+          disabled={mutation.isPending || form.full_name.trim().length < 3}
+          onClick={() => mutation.mutate()}
+          variant="premium"
+        >
+          <Save size={18} />
+          {mutation.isPending ? 'Salvando...' : 'Salvar perfil'}
+        </Button>
       </div>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <Field label="Nome completo">
+          <Input
+            value={form.full_name}
+            onChange={(event) => setForm({ ...form, full_name: event.target.value })}
+          />
+        </Field>
+        <Field label="Telefone">
+          <Input
+            inputMode="tel"
+            placeholder="(00) 00000-0000"
+            value={form.phone}
+            onChange={(event) => setForm({ ...form, phone: event.target.value })}
+          />
+        </Field>
+        <Field label="Data de nascimento">
+          <Input
+            type="date"
+            value={form.birth_date}
+            onChange={(event) => setForm({ ...form, birth_date: event.target.value })}
+          />
+        </Field>
+        <Field label="Genero">
+          <Input
+            placeholder="Ex.: feminino, masculino, nao informar"
+            value={form.gender}
+            onChange={(event) => setForm({ ...form, gender: event.target.value })}
+          />
+        </Field>
+        <Field label="Objetivo">
+          <Input
+            placeholder="Ex.: ganho de massa, saude, performance"
+            value={form.objective}
+            onChange={(event) => setForm({ ...form, objective: event.target.value })}
+          />
+        </Field>
+        <Field label="Email">
+          <Input disabled value={context.profile?.email ?? ''} />
+        </Field>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <MiniStatus label="Nutricionista" value={context.nutritionist?.specialty ?? 'Star Nutri'} />
+        <MiniStatus label="Status" value={context.patient.is_active ? 'Ativo' : 'Inativo'} />
+      </div>
+
+      {saved && (
+        <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200">
+          Perfil atualizado com sucesso.
+        </p>
+      )}
+      {mutation.error && (
+        <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200">
+          {mutation.error instanceof Error ? mutation.error.message : 'Nao foi possivel salvar.'}
+        </p>
+      )}
     </Card>
   )
+}
+
+function Field({
+  children,
+  label,
+}: {
+  children: React.ReactNode
+  label: string
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-black uppercase text-slate-400">
+        {label}
+      </span>
+      {children}
+    </label>
+  )
+}
+
+function nullable(value: string) {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
 }
 
 function MiniStatus({ label, value }: { label: string; value: string | number }) {

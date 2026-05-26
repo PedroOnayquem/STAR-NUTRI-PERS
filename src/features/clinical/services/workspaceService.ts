@@ -58,6 +58,22 @@ export function getPatientContext(session: Session | null) {
   return apiRequest<PatientContext>('/api/patients/me/context', session)
 }
 
+export function updateMyPatientProfile(
+  session: Session | null,
+  payload: {
+    full_name?: string
+    phone?: string | null
+    birth_date?: string | null
+    gender?: string | null
+    objective?: string | null
+  },
+) {
+  return apiRequest<PatientContext['patient']>('/api/patients/me/profile', session, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function getAdminWorkspace(session: Session | null) {
   return apiRequest<AdminWorkspace>('/api/admin/workspace', session)
 }

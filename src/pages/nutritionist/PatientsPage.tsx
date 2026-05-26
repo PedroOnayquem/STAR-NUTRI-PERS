@@ -17,7 +17,7 @@ import {
   createPatient,
   type CreatePatientInput,
 } from '../../features/nutritionist/services/patientService'
-import { useMemo, useState } from 'react'
+import { useDeferredValue, useMemo, useState } from 'react'
 
 const patientSchema = z.object({
   fullName: z.string().min(3, 'Informe o nome completo.'),
@@ -34,6 +34,7 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
 
   const workspaceQuery = useQuery({
     queryKey: ['nutritionist-workspace'],
@@ -64,7 +65,7 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
 
   const patients = useMemo(() => {
     const all = workspaceQuery.data?.patients ?? []
-    const term = search.trim().toLowerCase()
+    const term = deferredSearch.trim().toLowerCase()
     if (!term) return all
 
     return all.filter((patient) => {
@@ -73,7 +74,7 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
       const objective = patient.objective?.toLowerCase() ?? ''
       return name.includes(term) || email.includes(term) || objective.includes(term)
     })
-  }, [search, workspaceQuery.data?.patients])
+  }, [deferredSearch, workspaceQuery.data?.patients])
 
   if (workspaceQuery.isLoading) return <PageSkeleton />
   if (workspaceQuery.error) throw workspaceQuery.error

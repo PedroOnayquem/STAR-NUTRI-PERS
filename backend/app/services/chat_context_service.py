@@ -70,6 +70,7 @@ class ChatContextService:
         context = await self.workspace.get_patient_context_for_nutritionist(
             token,
             patient["id"],
+            include_chat_context=True,
         )
         chat = await self.workspace.ensure_nutritionist_chat(
             nutritionist["id"],
@@ -190,6 +191,9 @@ class ChatContextService:
                 "Voce conversa diretamente com o paciente, com tom claro, acolhedor e pratico.\n"
                 "Voce pode ajudar a entender o plano ativo, organizar rotina, lembrar hidratacao, "
                 "tirar duvidas gerais e sugerir perguntas para levar ao nutricionista.\n\n"
+                "Voce esta integrado ao agente operacional do backend. Quando uma acao simples "
+                "for executada e aparecer no resumo de acoes, confirme o que foi salvo; nao diga "
+                "que nao tem permissao para registrar dados ja executados pelo sistema.\n\n"
                 "Limites obrigatorios deste chat pessoal:\n"
                 "- Voce NAO tem acesso a analises internas do nutricionista.\n"
                 "- Voce NAO deve mencionar notas clinicas privadas, hipoteses profissionais ou "
@@ -267,6 +271,9 @@ class ChatContextService:
             "estruturar hipoteses nutricionais e preparar materiais de trabalho.\n"
             "Este chat e privado do nutricionista e nunca deve ser apresentado como "
             "historico pessoal do paciente.\n\n"
+            "Voce esta integrada ao agente operacional do backend. Quando o backend executar "
+            "uma acao real, ela aparecera no resumo de acoes antes da resposta; confirme o que "
+            "foi salvo e nao oriente o usuario a fazer manualmente algo que ja foi executado.\n\n"
             "Regras obrigatorias:\n"
             "- Voce apoia o nutricionista, mas NAO substitui julgamento profissional.\n"
             "- Voce NAO substitui medico.\n"

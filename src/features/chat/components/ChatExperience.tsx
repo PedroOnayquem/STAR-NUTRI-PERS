@@ -1,11 +1,17 @@
 import {
+  memo,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
+  type KeyboardEvent,
+  type RefObject,
 } from 'react'
-import { motion } from 'framer-motion'
+import { createPortal } from 'react-dom'
+import { AnimatePresence, motion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -18,11 +24,12 @@ import {
   Clock,
   Loader2,
   MessageSquarePlus,
+  Mic,
   Search,
   Send,
-  Sparkles,
   XCircle,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { Button } from '../../../components/ui/Button'
 import { Skeleton } from '../../../components/ui/Skeleton'
 import { Textarea } from '../../../components/ui/Input'
@@ -76,19 +83,27 @@ export function ChatExperience({
 }: ChatExperienceProps) {
   const [content, setContent] = useState('')
   const [conversationSearch, setConversationSearch] = useState('')
-  const [reasoningLevel, setReasoningLevel] = useState<AiReasoningLevel>('medium')
+  const [reasoningLevel, setReasoningLevel] = useState<AiReasoningLevel>(() =>
+    readReasoningPreference('star-nutri:chat-reasoning:draft') ?? 'medium',
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const deferredConversationSearch = useDeferredValue(conversationSearch)
   const normalizedPatientId = patientId ?? undefined
+  const isProfessional = scope === 'nutritionist'
   const chat = useStarNutriChat({
     externalQueryKey,
     patientId: normalizedPatientId,
-    reasoningLevel,
+    reasoningLevel: isProfessional ? reasoningLevel : 'medium',
     scope,
   })
+  const reasoningStorageKey = isProfessional
+    ? `star-nutri:chat-reasoning:${chat.activeSessionId ?? normalizedPatientId ?? 'draft'}`
+    : null
 
   const patientOptions = useMemo(
-    () =>
-      (patients ?? []).map(
+    () => {
+      const mapped = (patients ?? []).map(
         (patient) =>
           ({
             email: patient.profile?.email ?? '',
@@ -96,24 +111,35 @@ export function ChatExperience({
             name: patient.profile?.full_name ?? 'Paciente',
             objective: patient.objective ?? '',
           }) satisfies PatientOption,
-      ),
-    [patients],
+      )
+
+      if (mapped.length > 0) return mapped
+
+      return patientName || patientId
+        ? [{
+            email: '',
+            id: patientId ?? 'me',
+            name: patientName ?? 'Paciente',
+            objective: '',
+          }]
+        : []
+    },
+    [patientId, patientName, patients],
   )
   const patientMenuOptions = useMemo(
     () =>
-      scope === 'nutritionist'
+      isProfessional
         ? [GENERAL_CHAT_OPTION, ...patientOptions]
         : patientOptions,
-    [patientOptions, scope],
+    [isProfessional, patientOptions],
   )
   const selectedPatient =
     patientMenuOptions.find((patient) => patient.id === patientId) ??
-    (scope === 'nutritionist' ? GENERAL_CHAT_OPTION : patientOptions[0])
-  const canSelectPatient = Boolean(onPatientChange && patientMenuOptions.length > 0)
+    (isProfessional ? GENERAL_CHAT_OPTION : patientOptions[0])
   const selectedPatientName = selectedPatient?.name ?? patientName ?? 'Paciente'
-  const isProfessional = scope === 'nutritionist'
+  const focusedPatientId = selectedPatient?.id ?? patientId ?? null
   const isGeneralProfessionalChat = isProfessional && !patientId
-  const hasRequiredFocus = !isProfessional || !canSelectPatient || Boolean(selectedPatient)
+  const hasRequiredFocus = !isProfessional || Boolean(selectedPatient)
   const currentSession = chat.sessions.find(
     (session) => session.id === chat.activeSessionId,
   )
@@ -138,7 +164,7 @@ export function ChatExperience({
     [chat.sessions, patientNameById],
   )
   const filteredSessions = useMemo(() => {
-    const term = conversationSearch.trim().toLowerCase()
+    const term = deferredConversationSearch.trim().toLowerCase()
     if (!term) return chat.sessions
 
     return chat.sessions.filter((session) => {
@@ -149,11 +175,38 @@ export function ChatExperience({
       const date = formatSessionDate(session).toLowerCase()
       return title.includes(term) || patient.includes(term) || date.includes(term)
     })
-  }, [chat.sessions, conversationSearch, patientLabelBySessionId])
+  }, [chat.sessions, deferredConversationSearch, patientLabelBySessionId])
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [chat.activeSessionId, chat.messages, chat.streaming])
+
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = '0px'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`
+  }, [content])
+
+  useEffect(() => {
+    if (!reasoningStorageKey) return
+    const saved = readReasoningPreference(reasoningStorageKey)
+    if (saved && saved !== reasoningLevel) {
+      const timeout = window.setTimeout(() => setReasoningLevel(saved), 0)
+      return () => window.clearTimeout(timeout)
+    }
+    if (!saved) {
+      writeReasoningPreference(reasoningStorageKey, reasoningLevel)
+    }
+  }, [reasoningLevel, reasoningStorageKey])
+
+  function changeReasoningLevel(level: AiReasoningLevel) {
+    setReasoningLevel(level)
+    writeReasoningPreference('star-nutri:chat-reasoning:draft', level)
+    if (reasoningStorageKey) {
+      writeReasoningPreference(reasoningStorageKey, level)
+    }
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -166,7 +219,7 @@ export function ChatExperience({
   return (
     <div
       className={cn(
-        'h-[calc(100vh-8rem)] min-h-[700px] overflow-visible rounded-3xl border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.08)] dark:border-white/10 dark:bg-slate-950 dark:shadow-none',
+        'h-[calc(100vh-8rem)] min-h-[680px] overflow-hidden rounded-[28px] border border-[var(--chat-border)] bg-[radial-gradient(circle_at_18%_0%,rgba(34,211,238,0.14),transparent_28%),radial-gradient(circle_at_86%_12%,rgba(16,185,129,0.12),transparent_24%),linear-gradient(145deg,#060818_0%,#0b1020_48%,#0f172a_100%)] text-slate-100 shadow-[0_28px_90px_rgba(2,6,23,0.36),0_0_70px_var(--chat-glow)]',
         className,
       )}
     >
@@ -184,19 +237,17 @@ export function ChatExperience({
           sessions={filteredSessions}
         />
 
-        <section className="flex min-h-0 flex-col bg-white dark:bg-slate-950">
+        <section className="flex min-h-0 flex-col bg-[linear-gradient(180deg,rgba(15,23,42,0.42),rgba(2,6,23,0.18))]">
           <ChatTopbar
             currentTitle={currentTitle}
             onPatientChange={onPatientChange}
-            onReasoningChange={setReasoningLevel}
-            patientId={patientId ?? null}
+            patientId={focusedPatientId}
             patientName={selectedPatientName}
             patients={patientMenuOptions}
-            reasoningLevel={reasoningLevel}
             scope={scope}
           />
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 [scrollbar-color:rgba(56,189,248,0.32)_transparent] [scrollbar-width:thin] sm:px-8">
             <div className="mx-auto flex min-h-full max-w-3xl flex-col">
               {!hasRequiredFocus ? (
                 <ChatEmpty
@@ -256,56 +307,27 @@ export function ChatExperience({
             </div>
           </div>
 
-          <form
-            className="border-t border-slate-200 bg-white/95 px-4 py-4 backdrop-blur dark:border-white/10 dark:bg-slate-950/95 sm:px-8"
+          <ChatComposer
+            content={content}
+            disabled={chat.sending || !hasRequiredFocus}
+            error={chat.error}
+            isProfessional={isProfessional}
+            onChange={setContent}
+            onReasoningChange={changeReasoningLevel}
             onSubmit={submit}
-          >
-            <div className="mx-auto max-w-3xl">
-              {chat.error && (
-                <p className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-300">
-                  {chat.error}
-                </p>
-              )}
-              <div className="flex items-end gap-2 rounded-3xl border border-slate-200 bg-slate-50 p-2 shadow-sm transition focus-within:border-emerald-400 focus-within:ring-4 focus-within:ring-emerald-500/10 dark:border-white/10 dark:bg-white/[0.04]">
-                <Textarea
-                  aria-label="Mensagem para a IA"
-                  className="min-h-12 resize-none border-0 bg-transparent px-3 py-3 shadow-none focus:ring-0 dark:bg-transparent"
-                  disabled={chat.sending || !hasRequiredFocus}
-                  onChange={(event) => setContent(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault()
-                      event.currentTarget.form?.requestSubmit()
-                    }
-                  }}
-                  placeholder={
-                    hasRequiredFocus
-                      ? isProfessional
-                        ? isGeneralProfessionalChat
-                          ? 'Mensagem profissional geral para o Star Nutri...'
-                          : 'Mensagem profissional para o Star Nutri...'
-                        : 'Pergunte sobre sua rotina...'
-                      : 'Selecione um paciente para conversar'
-                  }
-                  rows={1}
-                  value={content}
-                />
-                <Button
-                  aria-label="Enviar mensagem"
-                  disabled={chat.sending || !content.trim() || !hasRequiredFocus}
-                  size="icon"
-                  type="submit"
-                  variant="primary"
-                >
-                  {chat.sending ? (
-                    <Loader2 className="animate-spin" size={18} />
-                  ) : (
-                    <Send size={18} />
-                  )}
-                </Button>
-              </div>
-            </div>
-          </form>
+            placeholder={
+              hasRequiredFocus
+                ? isProfessional
+                  ? isGeneralProfessionalChat
+                    ? 'Mensagem profissional geral para o Star Nutri...'
+                    : 'Mensagem para o Star Nutri...'
+                  : 'Pergunte sobre sua rotina...'
+                : 'Selecione um paciente para conversar'
+            }
+            reasoningLevel={reasoningLevel}
+            sending={chat.sending}
+            textareaRef={textareaRef}
+          />
         </section>
       </div>
     </div>
@@ -336,14 +358,14 @@ function ChatSidebar({
   sessions: ChatSessionRecord[]
 }) {
   return (
-    <aside className="flex max-h-80 min-h-0 flex-col border-b border-slate-200 bg-slate-50/85 dark:border-white/10 dark:bg-white/[0.03] lg:max-h-none lg:border-b-0 lg:border-r">
+    <aside className="flex max-h-72 min-h-0 flex-col border-b border-[var(--chat-border)] bg-[rgba(2,6,23,0.30)] backdrop-blur-xl lg:max-h-none lg:border-b-0 lg:border-r">
       <div className="space-y-3 p-3">
         <Button
-          className="h-10 w-full justify-start rounded-2xl"
+          className="h-10 w-full justify-start rounded-2xl border border-cyan-300/15 bg-slate-900/70 text-slate-100 shadow-[0_12px_34px_rgba(2,6,23,0.20)] hover:border-cyan-300/25 hover:bg-slate-800/80 hover:text-white hover:shadow-[0_16px_42px_rgba(56,189,248,0.12)]"
           disabled={!canCreate || creating}
           onClick={onCreateSession}
           type="button"
-          variant="primary"
+          variant="secondary"
         >
           {creating ? (
             <Loader2 className="animate-spin" size={17} />
@@ -353,10 +375,10 @@ function ChatSidebar({
           Novo Chat
         </Button>
 
-        <label className="flex h-10 items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 text-slate-500 shadow-sm dark:border-white/10 dark:bg-slate-950/60 dark:text-slate-400">
+        <label className="flex h-10 items-center gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/35 px-3 text-slate-400 shadow-inner shadow-cyan-950/10 transition focus-within:border-cyan-300/35 focus-within:bg-slate-950/55 focus-within:text-cyan-100 focus-within:ring-2 focus-within:ring-cyan-400/10">
           <Search size={16} />
           <input
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400"
+            className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
             onChange={(event) => onSearch(event.target.value)}
             placeholder="Buscar conversas"
             value={search}
@@ -372,7 +394,7 @@ function ChatSidebar({
             <Skeleton className="h-16 rounded-2xl" />
           </div>
         ) : sessions.length === 0 ? (
-          <div className="mx-1 rounded-2xl border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-white/15 dark:text-slate-400">
+          <div className="mx-1 rounded-2xl border border-dashed border-cyan-300/15 bg-slate-950/20 p-4 text-sm text-slate-400">
             Nenhuma conversa encontrada.
           </div>
         ) : (
@@ -382,8 +404,8 @@ function ChatSidebar({
                 className={cn(
                   'group w-full rounded-2xl px-3 py-3 text-left transition',
                   currentSessionId === session.id
-                    ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-white/10 dark:text-white dark:ring-white/10'
-                    : 'text-slate-600 hover:bg-white hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/[0.07] dark:hover:text-white',
+                    ? 'bg-cyan-300/10 text-white shadow-[inset_0_0_0_1px_rgba(34,211,238,0.14),0_12px_36px_rgba(8,47,73,0.16)]'
+                    : 'text-slate-400 hover:bg-cyan-300/[0.07] hover:text-slate-100',
                 )}
                 key={session.id}
                 onClick={() => onSelectSession(session.id)}
@@ -392,7 +414,7 @@ function ChatSidebar({
                 <span className="block truncate text-sm font-bold">
                   {session.title || 'Nova conversa'}
                 </span>
-                <span className="mt-1 block truncate text-xs text-slate-400">
+                <span className="mt-1 block truncate text-xs text-slate-500 group-hover:text-slate-400">
                   {patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name} -{' '}
                   {formatSessionDate(session)}
                 </span>
@@ -408,72 +430,48 @@ function ChatSidebar({
 function ChatTopbar({
   currentTitle,
   onPatientChange,
-  onReasoningChange,
   patientId,
   patientName,
   patients,
-  reasoningLevel,
   scope,
 }: {
   currentTitle: string
   onPatientChange?: (patientId: string | null) => void
-  onReasoningChange: (level: AiReasoningLevel) => void
   patientId: string | null
   patientName: string
   patients: PatientOption[]
-  reasoningLevel: AiReasoningLevel
   scope: ChatScope
 }) {
   const [patientMenuOpen, setPatientMenuOpen] = useState(false)
-  const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false)
-  const selectedReasoning = AI_REASONING_LEVELS.find(
-    (level) => level.id === reasoningLevel,
-  )
 
   return (
-    <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur dark:border-white/10 dark:bg-slate-950/90 sm:px-5">
+    <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-[var(--chat-border)] bg-[rgba(6,8,24,0.64)] px-4 py-2.5 shadow-[0_1px_0_rgba(56,189,248,0.05)] backdrop-blur-xl sm:px-5">
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
-          <Bot size={17} />
-        </div>
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-black text-slate-950 dark:text-white">
+          <h2 className="truncate text-sm font-semibold text-slate-50">
             {currentTitle}
           </h2>
-          <p className="truncate text-xs text-slate-500 dark:text-slate-400">
-            {scope === 'nutritionist'
-              ? selectedReasoning?.label ?? 'Pensamento Medio'
-              : 'Historico pessoal e privado'}
+          <p className="truncate text-xs text-slate-400">
+            {scope === 'nutritionist' ? 'Chat do nutricionista' : 'Chat do paciente'}
           </p>
         </div>
       </div>
 
-      <div className="flex w-full min-w-0 flex-nowrap justify-end gap-2 overflow-x-auto pb-1 sm:w-auto sm:flex-1 sm:pb-0">
-        {onPatientChange && patients.length > 0 ? (
+      <div className="flex w-full min-w-0 flex-nowrap justify-end gap-2 pb-1 sm:w-auto sm:flex-1 sm:pb-0">
+        {patients.length > 0 ? (
           <PatientFocusMenu
             onChange={(nextPatientId) => {
-              onPatientChange(nextPatientId)
+              onPatientChange?.(nextPatientId)
               setPatientMenuOpen(false)
             }}
             onOpenChange={setPatientMenuOpen}
             open={patientMenuOpen}
             patientId={patientId}
             patients={patients}
+            scope={scope}
           />
         ) : (
           <StaticPatientPill patientName={patientName} />
-        )}
-
-        {scope === 'nutritionist' && (
-          <ReasoningMenu
-            onChange={(nextLevel) => {
-              onReasoningChange(nextLevel)
-              setReasoningMenuOpen(false)
-            }}
-            onOpenChange={setReasoningMenuOpen}
-            open={reasoningMenuOpen}
-            reasoningLevel={reasoningLevel}
-          />
         )}
       </div>
     </header>
@@ -486,82 +484,218 @@ function PatientFocusMenu({
   open,
   patientId,
   patients,
+  scope,
 }: {
   onChange: (patientId: string | null) => void
   onOpenChange: (open: boolean) => void
   open: boolean
   patientId: string | null
   patients: PatientOption[]
+  scope: ChatScope
 }) {
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? patients[0]
+  const [search, setSearch] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [anchorRect, setAnchorRect] = useState<PatientMenuAnchorRect | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const { debouncedValue: debouncedSearch, pending } = useDebouncedValue(search, 180)
+  const filteredPatients = useMemo(() => {
+    const term = debouncedSearch.trim().toLowerCase()
+    if (!term) return patients
+
+    return patients.filter((patient) => {
+      const haystack = `${patient.name} ${patient.email} ${patient.objective}`.toLowerCase()
+      return haystack.includes(term)
+    })
+  }, [debouncedSearch, patients])
+  const fullListPath = scope === 'nutritionist' ? '/nutritionist/patients' : '/patient/profile'
+  const isMobile = typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches
+  const menuStyle = getPatientMenuStyle(anchorRect, isMobile)
+
+  function setOpen(nextOpen: boolean) {
+    if (nextOpen) {
+      setAnchorRect(readPatientMenuAnchor(triggerRef.current))
+      setSearch('')
+      setActiveIndex(Math.max(0, filteredPatients.findIndex((patient) => patient.id === patientId)))
+      window.setTimeout(() => searchRef.current?.focus(), 40)
+    }
+    onOpenChange(nextOpen)
+  }
+
+  function selectPatient(nextPatientId: string | null) {
+    onChange(nextPatientId)
+    setOpen(false)
+  }
+
+  function handleTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== 'ArrowDown' && event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    setOpen(true)
+  }
+
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+      return
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setActiveIndex((current) => Math.min(current + 1, filteredPatients.length - 1))
+      return
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex((current) => Math.max(current - 1, 0))
+      return
+    }
+
+    if (event.key === 'Enter' && filteredPatients[activeIndex]) {
+      event.preventDefault()
+      selectPatient(filteredPatients[activeIndex].id)
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return
+
+    const updatePosition = () => setAnchorRect(readPatientMenuAnchor(triggerRef.current))
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open])
 
   return (
-    <div className="relative min-w-0 flex-1 sm:flex-none">
+    <div className="min-w-0 flex-1 sm:flex-none">
       <button
+        ref={triggerRef}
         aria-expanded={open}
+        aria-haspopup="dialog"
         aria-label="Paciente em foco"
-        className="group inline-flex h-12 w-full min-w-0 max-w-[min(58vw,20rem)] items-center gap-2 rounded-2xl border border-emerald-200/80 bg-gradient-to-b from-white to-emerald-50/70 px-2.5 py-1.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md dark:border-emerald-400/20 dark:from-white/[0.08] dark:to-emerald-400/10 sm:w-auto sm:max-w-80"
-        onClick={() => onOpenChange(!open)}
+        className="group inline-flex h-9 w-full min-w-0 max-w-[min(64vw,20rem)] items-center gap-2 rounded-full border border-cyan-300/10 bg-slate-950/35 px-3 text-left text-slate-100 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition hover:border-cyan-300/25 hover:bg-cyan-300/[0.08] hover:text-white hover:shadow-[0_0_24px_rgba(56,189,248,0.10)] sm:w-auto sm:max-w-80"
+        onClick={() => setOpen(!open)}
+        onKeyDown={handleTriggerKeyDown}
         type="button"
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-xs font-black text-white shadow-[0_10px_24px_rgba(16,185,129,0.25)]">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan-300/12 text-[10px] font-black text-cyan-100">
           {selectedPatient?.isGeneral ? 'IA' : getInitials(selectedPatient?.name ?? 'P')}
         </span>
-        <span className="block min-w-0 flex-1 truncate text-sm font-black text-slate-950 dark:text-white">
+        <span className="block min-w-0 flex-1 truncate text-sm font-medium">
           {selectedPatient?.name ?? 'Selecionar paciente'}
         </span>
         <ChevronDown
           className={cn(
-            'shrink-0 text-emerald-600 transition dark:text-emerald-300',
+            'shrink-0 text-cyan-200/70 transition group-hover:text-cyan-100',
             open && 'rotate-180',
           )}
-          size={16}
+          size={15}
         />
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-[min(92vw,380px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-slate-900">
-          <div className="max-h-80 overflow-y-auto p-2">
-            {patients.map((patient) => {
-              const selected = patient.id === patientId
-              return (
-                <button
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition',
-                    selected
-                      ? 'bg-emerald-50 text-emerald-950 ring-1 ring-emerald-200 dark:bg-emerald-400/10 dark:text-emerald-100 dark:ring-emerald-400/20'
-                      : 'hover:bg-slate-50 dark:hover:bg-white/[0.06]',
+      {createPortal(
+        <AnimatePresence>
+          {open && (
+            <>
+              <motion.div
+                animate={{ opacity: 1 }}
+                className="fixed inset-0 z-40 bg-[#020617]/35 backdrop-blur-[3px]"
+                exit={{ opacity: 0 }}
+                initial={{ opacity: 0 }}
+                onClick={() => setOpen(false)}
+              />
+              <motion.div
+                animate={isMobile ? { opacity: 1, y: 0 } : { opacity: 1, scale: 1, y: 0 }}
+                aria-label="Selecionar paciente"
+                aria-modal={isMobile}
+                className={cn(
+                  'fixed z-50 flex overflow-hidden border border-cyan-300/15 bg-[rgba(11,16,32,0.94)] text-slate-100 shadow-[0_24px_80px_rgba(2,6,23,0.56),0_0_70px_rgba(56,189,248,0.16)] backdrop-blur-2xl',
+                  isMobile
+                    ? 'inset-x-3 bottom-3 max-h-[78vh] flex-col rounded-[24px]'
+                    : 'max-h-[520px] flex-col rounded-2xl',
+                )}
+                exit={isMobile ? { opacity: 0, y: 24 } : { opacity: 0, scale: 0.98, y: -6 }}
+                initial={isMobile ? { opacity: 0, y: 24 } : { opacity: 0, scale: 0.98, y: -6 }}
+                role="dialog"
+                style={menuStyle}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+              >
+                <div className="border-b border-cyan-300/10 p-3">
+                  <label className="flex h-11 items-center gap-2 rounded-xl bg-slate-950/40 px-3 text-slate-300 ring-1 ring-cyan-300/12 transition focus-within:bg-slate-950/65 focus-within:ring-cyan-300/30 focus-within:shadow-[0_0_28px_rgba(56,189,248,0.10)]">
+                    <Search size={16} />
+                    <input
+                      ref={searchRef}
+                      className="min-w-0 flex-1 bg-transparent text-[15px] font-normal text-white outline-none placeholder:text-slate-500"
+                      onChange={(event) => {
+                        setSearch(event.target.value)
+                        setActiveIndex(0)
+                      }}
+                      onKeyDown={handleSearchKeyDown}
+                      placeholder="Buscar paciente..."
+                      value={search}
+                    />
+                    {pending && <Loader2 className="animate-spin text-slate-400" size={16} />}
+                  </label>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2 [scrollbar-color:rgba(56,189,248,0.35)_transparent] [scrollbar-width:thin]">
+                  {filteredPatients.length === 0 ? (
+                    <p className="px-3 py-8 text-center text-sm text-slate-400">
+                      Nenhum paciente encontrado.
+                    </p>
+                  ) : (
+                    filteredPatients.map((patient, index) => {
+                      const selected = patient.id === patientId
+                      const active = index === activeIndex
+                      return (
+                        <button
+                          className={cn(
+                            'flex h-11 w-full items-center gap-2 rounded-xl px-3 text-left text-sm transition duration-150',
+                            selected
+                              ? 'bg-cyan-300/[0.12] text-white shadow-[inset_0_0_0_1px_rgba(34,211,238,0.14)]'
+                              : active
+                                ? 'bg-cyan-300/[0.08] text-white'
+                                : 'text-slate-300 hover:bg-cyan-300/[0.07] hover:text-white',
+                          )}
+                          key={patient.id ?? 'general'}
+                          onClick={() => selectPatient(patient.id)}
+                          onMouseEnter={() => setActiveIndex(index)}
+                          type="button"
+                        >
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-300/10 text-[10px] font-black text-cyan-100">
+                            {patient.isGeneral ? 'IA' : getInitials(patient.name)}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate font-medium">
+                            {patient.name}
+                          </span>
+                          {selected && <Check className="text-cyan-200" size={16} />}
+                        </button>
+                      )
+                    })
                   )}
-                  key={patient.id ?? 'general'}
-                  onClick={() => onChange(patient.id)}
-                  type="button"
-                >
-                  <span
-                    className={cn(
-                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-xs font-black text-white',
-                      patient.isGeneral
-                        ? 'bg-emerald-500'
-                        : 'bg-slate-950 dark:bg-white dark:text-slate-950',
-                    )}
+                </div>
+
+                <div className="border-t border-cyan-300/10 p-2">
+                  <Link
+                    className="block rounded-xl px-3 py-3 text-sm font-medium text-slate-300 transition hover:bg-cyan-300/[0.08] hover:text-white"
+                    onClick={() => setOpen(false)}
+                    to={fullListPath}
                   >
-                    {patient.isGeneral ? 'IA' : getInitials(patient.name)}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-black">
-                      {patient.name}
-                    </span>
-                    <span className="mt-0.5 block truncate text-xs text-slate-500 dark:text-slate-400">
-                      {patient.isGeneral
-                        ? patient.objective
-                        : patient.objective || patient.email || 'Sem objetivo cadastrado'}
-                    </span>
-                  </span>
-                  {selected && <Check className="text-emerald-600" size={17} />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
+                    Ver todos os pacientes
+                  </Link>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>,
+        document.body,
       )}
     </div>
   )
@@ -569,26 +703,118 @@ function PatientFocusMenu({
 
 function StaticPatientPill({ patientName }: { patientName: string }) {
   return (
-    <div className="inline-flex h-12 min-w-0 max-w-[min(58vw,20rem)] items-center gap-2 truncate rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold shadow-sm dark:border-white/10 dark:bg-white/[0.04] sm:max-w-72">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-xs font-black text-white dark:bg-white dark:text-slate-950">
-        {getInitials(patientName)}
-      </span>
-      <span className="block min-w-0 truncate text-sm font-black">{patientName}</span>
+    <div className="inline-flex h-9 min-w-0 max-w-[min(64vw,20rem)] items-center gap-2 truncate rounded-full border border-cyan-300/10 bg-slate-950/35 px-3 text-sm font-medium text-slate-100 sm:max-w-72">
+      <span className="block min-w-0 truncate">{patientName}</span>
     </div>
+  )
+}
+
+function ChatComposer({
+  content,
+  disabled,
+  error,
+  isProfessional,
+  onChange,
+  onReasoningChange,
+  onSubmit,
+  placeholder,
+  reasoningLevel,
+  sending,
+  textareaRef,
+}: {
+  content: string
+  disabled: boolean
+  error: string | null
+  isProfessional: boolean
+  onChange: (value: string) => void
+  onReasoningChange: (level: AiReasoningLevel) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  placeholder: string
+  reasoningLevel: AiReasoningLevel
+  sending: boolean
+  textareaRef: RefObject<HTMLTextAreaElement | null>
+}) {
+  return (
+    <form
+      className="border-t border-[var(--chat-border)] bg-[rgba(6,8,24,0.70)] px-3 py-3 shadow-[0_-20px_60px_rgba(2,6,23,0.28)] backdrop-blur-xl sm:px-8 sm:py-4"
+      onSubmit={onSubmit}
+    >
+      <div className="mx-auto max-w-3xl">
+        <AnimatePresence>
+          {error && (
+            <motion.p
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-300"
+              exit={{ opacity: 0, y: 4 }}
+              initial={{ opacity: 0, y: 4 }}
+            >
+              {error}
+            </motion.p>
+          )}
+        </AnimatePresence>
+
+        <div className="rounded-[26px] border border-cyan-300/14 bg-[rgba(15,23,42,0.76)] p-2 shadow-[0_18px_60px_rgba(2,6,23,0.34),0_0_42px_rgba(56,189,248,0.08)] backdrop-blur-xl transition duration-200 focus-within:border-cyan-300/35 focus-within:bg-[rgba(15,23,42,0.88)] focus-within:shadow-[0_22px_70px_rgba(2,6,23,0.42),0_0_54px_rgba(56,189,248,0.15)]">
+          <Textarea
+            ref={textareaRef}
+            aria-label="Mensagem para a IA"
+            className="max-h-40 min-h-10 resize-none border-0 bg-transparent px-3 py-2.5 text-[15px] leading-6 text-slate-100 shadow-none placeholder:text-slate-500 focus:ring-0 dark:bg-transparent"
+            disabled={disabled}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                event.currentTarget.form?.requestSubmit()
+              }
+            }}
+            placeholder={placeholder}
+            rows={1}
+            value={content}
+          />
+
+          <div className="mt-1 flex items-center justify-end gap-1.5">
+            {isProfessional && (
+              <ReasoningMenu
+                onChange={onReasoningChange}
+                reasoningLevel={reasoningLevel}
+              />
+            )}
+            <button
+              aria-label="Microfone"
+              className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition hover:bg-cyan-300/[0.09] hover:text-cyan-100 hover:shadow-[0_0_22px_rgba(56,189,248,0.12)] disabled:opacity-40"
+              disabled={disabled}
+              title="Microfone"
+              type="button"
+            >
+              <Mic size={18} />
+            </button>
+            <button
+              aria-label="Enviar mensagem"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-100 text-slate-950 shadow-[0_0_28px_rgba(56,189,248,0.22)] transition hover:scale-[1.03] hover:bg-white hover:shadow-[0_0_36px_rgba(56,189,248,0.32)] disabled:scale-100 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none"
+              disabled={sending || !content.trim() || disabled}
+              title="Enviar"
+              type="submit"
+            >
+              {sending ? (
+                <Loader2 className="animate-spin" size={18} />
+              ) : (
+                <Send size={17} />
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </form>
   )
 }
 
 function ReasoningMenu({
   onChange,
-  onOpenChange,
-  open,
   reasoningLevel,
 }: {
   onChange: (level: AiReasoningLevel) => void
-  onOpenChange: (open: boolean) => void
-  open: boolean
   reasoningLevel: AiReasoningLevel
 }) {
+  const [open, setOpen] = useState(false)
   const selected = AI_REASONING_LEVELS.find((level) => level.id === reasoningLevel)
 
   return (
@@ -596,56 +822,70 @@ function ReasoningMenu({
       <button
         aria-expanded={open}
         aria-label="Nivel de pensamento da IA"
-        className="group inline-flex h-12 items-center gap-2 rounded-2xl border border-cyan-200/80 bg-gradient-to-b from-white to-cyan-50/70 px-3 py-1.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md dark:border-cyan-400/20 dark:from-white/[0.08] dark:to-cyan-400/10"
-        onClick={() => onOpenChange(!open)}
+        className="group inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-slate-400 transition hover:bg-cyan-300/[0.09] hover:text-cyan-100 hover:shadow-[0_0_22px_rgba(56,189,248,0.12)]"
+        onClick={() => setOpen(!open)}
         type="button"
+        title="Pensamento"
       >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-cyan-500 text-white shadow-[0_10px_24px_rgba(6,182,212,0.22)]">
-          <BrainCircuit size={16} />
-        </span>
-        <span className="block min-w-0 truncate text-sm font-black text-slate-950 dark:text-white">
+        <BrainCircuit size={17} />
+        <span className="hidden min-w-0 truncate sm:block">
           {selected?.shortLabel ?? 'Medio'}
         </span>
         <ChevronDown
           className={cn(
-            'shrink-0 text-cyan-600 transition dark:text-cyan-300',
+            'shrink-0 transition',
             open && 'rotate-180',
           )}
-          size={16}
+          size={14}
         />
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-[min(92vw,340px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-slate-900">
-          <div className="p-2">
-            {AI_REASONING_LEVELS.map((level) => {
-              const active = level.id === reasoningLevel
-              return (
-                <button
-                  className={cn(
-                    'flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition',
-                    active
-                      ? 'bg-cyan-50 text-cyan-950 ring-1 ring-cyan-200 dark:bg-cyan-400/10 dark:text-cyan-100 dark:ring-cyan-400/20'
-                      : 'hover:bg-slate-50 dark:hover:bg-white/[0.06]',
-                  )}
-                  key={level.id}
-                  onClick={() => onChange(level.id)}
-                  type="button"
-                >
-                  <span className={cn('mt-1 h-2.5 w-2.5 shrink-0 rounded-full', reasoningDotClass(level.id))} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-black">{level.label}</span>
-                    <span className="mt-0.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {level.description}
+      <AnimatePresence>
+        {open && (
+          <>
+            <motion.div
+              animate={{ opacity: 1 }}
+              className="fixed inset-0 z-20 bg-[#020617]/20 backdrop-blur-[1px]"
+              exit={{ opacity: 0 }}
+              initial={{ opacity: 0 }}
+              onClick={() => setOpen(false)}
+            />
+            <motion.div
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              className="absolute bottom-full right-0 z-30 mb-2 w-[min(calc(100vw-2rem),300px)] overflow-hidden rounded-2xl border border-cyan-300/15 bg-[rgba(11,16,32,0.94)] p-1.5 text-slate-100 shadow-[0_24px_70px_rgba(2,6,23,0.50),0_0_54px_rgba(56,189,248,0.14)] backdrop-blur-xl"
+              exit={{ opacity: 0, scale: 0.98, y: 6 }}
+              initial={{ opacity: 0, scale: 0.98, y: 6 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+            >
+              {AI_REASONING_LEVELS.map((level) => {
+                const active = level.id === reasoningLevel
+                return (
+                  <button
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition',
+                      active
+                        ? 'bg-cyan-300/[0.12] text-white shadow-[inset_0_0_0_1px_rgba(34,211,238,0.14)]'
+                        : 'text-slate-300 hover:bg-cyan-300/[0.07] hover:text-white',
+                    )}
+                    key={level.id}
+                    onClick={() => {
+                      onChange(level.id)
+                      setOpen(false)
+                    }}
+                    type="button"
+                  >
+                    <span className={cn('h-2 w-2 shrink-0 rounded-full', reasoningDotClass(level.id))} />
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {level.shortLabel}
                     </span>
-                  </span>
-                  {active && <Check className="text-cyan-600" size={17} />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
+                    {active && <Check className="text-cyan-200" size={16} />}
+                  </button>
+                )
+              })}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -666,6 +906,74 @@ function reasoningDotClass(level: AiReasoningLevel) {
   return 'bg-violet-500'
 }
 
+type PatientMenuAnchorRect = {
+  bottom: number
+  right: number
+}
+
+function readPatientMenuAnchor(trigger: HTMLButtonElement | null): PatientMenuAnchorRect | null {
+  const rect = trigger?.getBoundingClientRect()
+  if (!rect) return null
+  return {
+    bottom: rect.bottom,
+    right: rect.right,
+  }
+}
+
+function getPatientMenuStyle(
+  anchor: PatientMenuAnchorRect | null,
+  isMobile: boolean,
+): CSSProperties {
+  if (isMobile || typeof window === 'undefined') return {}
+
+  const width = Math.min(420, window.innerWidth - 32)
+  const left = anchor
+    ? Math.min(Math.max(16, anchor.right - width), window.innerWidth - width - 16)
+    : window.innerWidth - width - 16
+  const top = anchor ? anchor.bottom + 10 : 72
+  const maxHeight = Math.max(320, Math.min(520, window.innerHeight - top - 16))
+
+  return {
+    left,
+    maxHeight,
+    top,
+    width,
+  }
+}
+
+function useDebouncedValue(value: string, delay: number) {
+  const [debouncedValue, setDebouncedValue] = useState(value)
+
+  useEffect(() => {
+    if (value === debouncedValue) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setDebouncedValue(value)
+    }, delay)
+
+    return () => window.clearTimeout(timeout)
+  }, [debouncedValue, delay, value])
+
+  return { debouncedValue, pending: value !== debouncedValue }
+}
+
+function readReasoningPreference(key: string): AiReasoningLevel | null {
+  if (typeof window === 'undefined') return null
+  const value = window.localStorage.getItem(key)
+  return isReasoningLevel(value) ? value : null
+}
+
+function writeReasoningPreference(key: string, level: AiReasoningLevel) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(key, level)
+}
+
+function isReasoningLevel(value: string | null): value is AiReasoningLevel {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'ultra'
+}
+
 type AgentAction = {
   error?: string | null
   label?: string
@@ -675,7 +983,7 @@ type AgentAction = {
   tool?: string
 }
 
-function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
   message,
   own,
   streaming,
@@ -687,34 +995,24 @@ function MessageBubble({
   const actions = getAgentActions(message.metadata)
 
   return (
-    <motion.div
-      animate={{ opacity: 1, y: 0 }}
-      className={cn('flex gap-3', own ? 'justify-end' : 'justify-start')}
-      initial={{ opacity: 0, y: 8 }}
-      transition={{ duration: 0.16 }}
-    >
-      {!own && (
-        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-          <Sparkles size={15} />
-        </div>
-      )}
+    <div className={cn('flex', own ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'max-w-[88%] text-sm leading-7',
+          'max-w-[88%] text-sm leading-7 sm:max-w-[78%]',
           own
-            ? 'rounded-3xl bg-slate-950 px-4 py-3 text-white dark:bg-white dark:text-slate-950'
-            : 'min-w-0 flex-1 text-slate-700 dark:text-slate-100',
+            ? 'rounded-[22px] bg-cyan-100 px-4 py-2.5 text-slate-950 shadow-[0_10px_34px_rgba(56,189,248,0.16)]'
+            : 'min-w-0 flex-1 text-slate-100',
         )}
       >
         <MarkdownContent content={message.content} />
         {!own && actions.length > 0 && <AgentActionList actions={actions} />}
         {streaming && (
-          <span className="mt-2 inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+          <span className="mt-2 inline-flex h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_18px_rgba(34,211,238,0.55)]" />
         )}
       </div>
-    </motion.div>
+    </div>
   )
-}
+})
 
 function AgentActionList({ actions }: { actions: AgentAction[] }) {
   return (
@@ -774,7 +1072,7 @@ function actionTone(status: AgentAction['status']) {
 
 function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="max-w-none text-sm leading-7 [&_a]:font-semibold [&_a]:text-emerald-600 dark:[&_a]:text-emerald-300 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-4 [&_code]:rounded-md [&_code]:bg-slate-100 [&_code]:px-1.5 [&_code]:py-0.5 dark:[&_code]:bg-white/10 [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-black [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-lg [&_h2]:font-black [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:bg-slate-950 [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-4 [&_table]:w-full [&_table]:overflow-hidden [&_table]:rounded-2xl [&_table]:text-left [&_td]:border-t [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-2 dark:[&_td]:border-white/10 [&_th]:bg-slate-100 [&_th]:px-3 [&_th]:py-2 [&_th]:font-bold dark:[&_th]:bg-white/10 [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5">
+    <div className="max-w-none text-sm leading-7 [&_a]:font-semibold [&_a]:text-cyan-300 [&_blockquote]:border-l-2 [&_blockquote]:border-cyan-300/25 [&_blockquote]:pl-4 [&_code]:rounded-md [&_code]:bg-cyan-300/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-black [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-lg [&_h2]:font-black [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-cyan-300/10 [&_pre]:bg-slate-950/75 [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-4 [&_table]:w-full [&_table]:overflow-hidden [&_table]:rounded-2xl [&_table]:text-left [&_td]:border-t [&_td]:border-cyan-300/10 [&_td]:px-3 [&_td]:py-2 [&_th]:bg-cyan-300/10 [&_th]:px-3 [&_th]:py-2 [&_th]:font-bold [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   )
@@ -782,14 +1080,11 @@ function MarkdownContent({ content }: { content: string }) {
 
 function TypingBubble() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-        <Sparkles size={15} />
-      </div>
-      <div className="inline-flex items-center gap-1 rounded-3xl border border-slate-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-white/[0.04]">
-        <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.2s]" />
-        <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.1s]" />
-        <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400" />
+    <div className="flex items-center">
+      <div className="inline-flex items-center gap-1 rounded-3xl bg-cyan-300/10 px-4 py-3 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.10)]">
+        <span className="h-2 w-2 animate-bounce rounded-full bg-cyan-300 [animation-delay:-0.2s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-cyan-300 [animation-delay:-0.1s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-cyan-300" />
       </div>
     </div>
   )
@@ -815,13 +1110,13 @@ function ChatEmpty({
   return (
     <div className="flex flex-1 items-center justify-center py-16 text-center">
       <div>
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-3xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-3xl bg-cyan-100 text-slate-950 shadow-[0_0_42px_rgba(56,189,248,0.24)]">
           <Bot size={20} />
         </div>
-        <h3 className="mt-4 text-lg font-black text-slate-950 dark:text-white">
+        <h3 className="mt-4 text-lg font-black text-slate-50">
           {title}
         </h3>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500 dark:text-slate-400">
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-400">
           {description}
         </p>
       </div>
