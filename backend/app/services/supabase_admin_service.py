@@ -113,6 +113,7 @@ class SupabaseAdminService:
                         "user_metadata": {
                             "full_name": payload.full_name,
                             "role": "nutritionist",
+                            "must_change_password": True,
                         },
                     },
                 )

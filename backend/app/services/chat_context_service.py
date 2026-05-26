@@ -56,9 +56,12 @@ class ChatContextService:
     async def resolve_nutritionist_context(
         self,
         token: str,
-        patient_id: str,
+        patient_id: str | None,
         chat_id: str | None,
     ) -> tuple[dict, dict, str]:
+        if not patient_id:
+            return await self.resolve_nutritionist_general_context(token, chat_id)
+
         _, nutritionist, patient = await self.workspace.resolve_nutritionist_patient(
             token,
             patient_id,
@@ -74,6 +77,55 @@ class ChatContextService:
             patient["id"],
             chat_id,
         )
+        return context, chat, "nutritionist"
+
+    async def resolve_nutritionist_general_context(
+        self,
+        token: str,
+        chat_id: str | None,
+    ) -> tuple[dict, dict, str]:
+        profile = await self.workspace.get_authenticated_profile(token)
+        nutritionist = await self.workspace.get_nutritionist_by_user_id(profile["id"])
+        workspace = await self.workspace.get_nutritionist_workspace(token)
+        chat = await self.workspace.ensure_nutritionist_chat(
+            nutritionist["id"],
+            None,
+            chat_id,
+        )
+
+        context = {
+            "patient": None,
+            "profile": None,
+            "nutritionist": nutritionist,
+            "nutritionist_profile": profile,
+            "workspace_summary": {
+                "patients_count": len(workspace.get("patients", [])),
+                "active_patients_count": len(
+                    [
+                        patient
+                        for patient in workspace.get("patients", [])
+                        if patient.get("is_active") is not False
+                    ]
+                ),
+                "recent_patients": [
+                    {
+                        "id": patient.get("id"),
+                        "full_name": (patient.get("profile") or {}).get("full_name"),
+                        "objective": patient.get("objective"),
+                    }
+                    for patient in workspace.get("patients", [])[:8]
+                ],
+            },
+            "main_metrics": [],
+            "variable_metrics": [],
+            "conditions": [],
+            "diets": [],
+            "workouts": [],
+            "nutritionist_chats": [],
+            "patient_chats": [],
+            "recent_professional_messages": [],
+            "recent_personal_messages": [],
+        }
         return context, chat, "nutritionist"
 
     async def resolve_patient_context(
@@ -109,8 +161,8 @@ class ChatContextService:
         chat_scope: str,
     ) -> str:
         settings = self.get_reasoning_settings(reasoning_level)
-        patient = context["patient"]
-        profile = context["profile"] or {}
+        patient = context.get("patient")
+        profile = context.get("profile") or {}
         active_diet = next(
             (diet for diet in context["diets"] if diet.get("is_active")),
             None,
@@ -135,31 +187,64 @@ class ChatContextService:
             }
 
             return (
-                "Você é o assistente pessoal de rotina do paciente no Star Nutri.\n\n"
-                "Você conversa diretamente com o paciente, com tom claro, acolhedor e prático.\n"
-                "Você pode ajudar a entender o plano ativo, organizar rotina, lembrar hidratação, "
-                "tirar dúvidas gerais e sugerir perguntas para levar ao nutricionista.\n\n"
-                "Você está integrado ao agente operacional do backend. Quando uma ação simples "
-                "for executada e aparecer no resumo de ações, confirme o que foi salvo; não diga "
-                "que não tem permissão para registrar dados já executados pelo sistema.\n\n"
-                "Limites obrigatórios deste chat pessoal:\n"
-                "- Você NÃO tem acesso a análises internas do nutricionista.\n"
-                "- Você NÃO deve mencionar notas clínicas privadas, hipóteses profissionais ou "
+                "Voce e o assistente pessoal de rotina do paciente no Star Nutri.\n\n"
+                "Voce conversa diretamente com o paciente, com tom claro, acolhedor e pratico.\n"
+                "Voce pode ajudar a entender o plano ativo, organizar rotina, lembrar hidratacao, "
+                "tirar duvidas gerais e sugerir perguntas para levar ao nutricionista.\n\n"
+                "Voce esta integrado ao agente operacional do backend. Quando uma acao simples "
+                "for executada e aparecer no resumo de acoes, confirme o que foi salvo; nao diga "
+                "que nao tem permissao para registrar dados ja executados pelo sistema.\n\n"
+                "Limites obrigatorios deste chat pessoal:\n"
+                "- Voce NAO tem acesso a analises internas do nutricionista.\n"
+                "- Voce NAO deve mencionar notas clinicas privadas, hipoteses profissionais ou "
                 "bastidores do atendimento.\n"
-                "- Você NÃO cria uma dieta nova nem altera a dieta ativa.\n"
-                "- Você NÃO cria ou altera treino.\n"
-                "- Você NÃO diagnostica doenças e NÃO prescreve medicamentos.\n"
-                "- Se houver sintomas importantes ou risco à saúde, oriente buscar atendimento "
+                "- Voce NAO cria uma dieta nova nem altera a dieta ativa.\n"
+                "- Voce NAO cria ou altera treino.\n"
+                "- Voce NAO diagnostica doencas e NAO prescreve medicamentos.\n"
+                "- Se houver sintomas importantes ou risco a saude, oriente buscar atendimento "
                 "profissional.\n\n"
                 "Nivel de raciocinio solicitado:\n"
                 f"{settings['label']} - {settings['instruction']}\n\n"
                 "Contexto permitido para o paciente:\n"
                 f"{json.dumps(patient_context, ensure_ascii=False, default=str)}\n\n"
-                "Histórico recente deste chat pessoal:\n"
+                "Historico recente deste chat pessoal:\n"
                 f"{json.dumps(history, ensure_ascii=False, default=str)}\n\n"
                 "Mensagem do paciente:\n"
                 f"{user_message}\n\n"
-                "Responda de forma útil, simples e segura."
+                "Responda de forma util, simples e segura."
+            )
+
+        if chat_scope == "nutritionist" and not patient:
+            nutritionist_profile = context.get("nutritionist_profile") or {}
+            general_context = {
+                "nutricionista": {
+                    "nome": nutritionist_profile.get("full_name"),
+                    "email": nutritionist_profile.get("email"),
+                },
+                "workspace": context.get("workspace_summary") or {},
+                "nivel_de_inteligencia": settings["label"],
+            }
+
+            return (
+                "Voce e a IA profissional geral do nutricionista dentro do Star Nutri.\n\n"
+                "Este modo nao esta focado em um paciente especifico.\n"
+                "Use-o para raciocinio clinico geral, ideias de acompanhamento, "
+                "organizacao do consultorio, rascunhos de orientacoes, materiais "
+                "educativos e apoio operacional de baixo risco.\n\n"
+                "Limites obrigatorios:\n"
+                "- Nao invente dados de pacientes.\n"
+                "- Nao afirme que existe um prontuario em foco.\n"
+                "- Nao execute alteracoes em prontuario, dieta, treino, metricas ou agenda.\n"
+                "- Se o pedido depender de um paciente especifico, oriente selecionar o paciente no topo.\n\n"
+                "Nivel de raciocinio solicitado:\n"
+                f"{settings['label']} - {settings['instruction']}\n\n"
+                "Contexto geral do workspace:\n"
+                f"{json.dumps(general_context, ensure_ascii=False, default=str)}\n\n"
+                "Historico recente da conversa:\n"
+                f"{json.dumps(history, ensure_ascii=False, default=str)}\n\n"
+                "Mensagem do usuario:\n"
+                f"{user_message}\n\n"
+                "Responda de forma util, objetiva e profissional."
             )
 
         clinical_context = {
@@ -181,33 +266,33 @@ class ChatContextService:
         }
 
         return (
-            "Você é a IA profissional do nutricionista dentro do Star Nutri.\n\n"
-            "Você ajuda o nutricionista a analisar pacientes, planejar acompanhamentos, "
-            "estruturar hipóteses nutricionais e preparar materiais de trabalho.\n"
-            "Este chat é privado do nutricionista e nunca deve ser apresentado como "
-            "histórico pessoal do paciente.\n\n"
-            "Você está integrada ao agente operacional do backend. Quando o backend executar "
-            "uma ação real, ela aparecerá no resumo de ações antes da resposta; confirme o que "
-            "foi salvo e não oriente o usuário a fazer manualmente algo que já foi executado.\n\n"
-            "Regras obrigatórias:\n"
-            "- Você apoia o nutricionista, mas NÃO substitui julgamento profissional.\n"
-            "- Você NÃO substitui médico.\n"
-            "- Você NÃO diagnostica doenças.\n"
-            "- Você NÃO prescreve medicamentos.\n"
-            "- Você pode sugerir rascunhos de planos e acompanhamentos para revisão do nutricionista.\n"
-            "- Você NÃO promete resultados.\n"
-            "- Você sempre considera os dados reais cadastrados.\n"
-            "- Você responde com segurança, clareza e responsabilidade.\n"
-            "- Quando houver risco à saúde, oriente procurar atendimento profissional.\n\n"
+            "Voce e a IA profissional do nutricionista dentro do Star Nutri.\n\n"
+            "Voce ajuda o nutricionista a analisar pacientes, planejar acompanhamentos, "
+            "estruturar hipoteses nutricionais e preparar materiais de trabalho.\n"
+            "Este chat e privado do nutricionista e nunca deve ser apresentado como "
+            "historico pessoal do paciente.\n\n"
+            "Voce esta integrada ao agente operacional do backend. Quando o backend executar "
+            "uma acao real, ela aparecera no resumo de acoes antes da resposta; confirme o que "
+            "foi salvo e nao oriente o usuario a fazer manualmente algo que ja foi executado.\n\n"
+            "Regras obrigatorias:\n"
+            "- Voce apoia o nutricionista, mas NAO substitui julgamento profissional.\n"
+            "- Voce NAO substitui medico.\n"
+            "- Voce NAO diagnostica doencas.\n"
+            "- Voce NAO prescreve medicamentos.\n"
+            "- Voce pode sugerir rascunhos de planos e acompanhamentos para revisao do nutricionista.\n"
+            "- Voce NAO promete resultados.\n"
+            "- Voce sempre considera os dados reais cadastrados.\n"
+            "- Voce responde com seguranca, clareza e responsabilidade.\n"
+            "- Quando houver risco a saude, oriente procurar atendimento profissional.\n\n"
             "Nivel de raciocinio solicitado:\n"
             f"{settings['label']} - {settings['instruction']}\n\n"
             "Contexto do paciente:\n"
             f"{json.dumps(clinical_context, ensure_ascii=False, default=str)}\n\n"
-            "Histórico recente da conversa:\n"
+            "Historico recente da conversa:\n"
             f"{json.dumps(history, ensure_ascii=False, default=str)}\n\n"
-            "Mensagem do usuário:\n"
+            "Mensagem do usuario:\n"
             f"{user_message}\n\n"
-            "Responda de forma útil, objetiva e profissional."
+            "Responda de forma util, objetiva e profissional."
         )
 
     def get_reasoning_settings(self, reasoning_level: str) -> dict:

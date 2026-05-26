@@ -25,7 +25,7 @@ async def list_chat_sessions(
 
 @router.get("/nutritionist/sessions")
 async def list_nutritionist_chat_sessions(
-    patient_id: str,
+    patient_id: str | None = None,
     token: str = Depends(get_bearer_token),
 ) -> list[dict]:
     workspace = SupabaseWorkspaceService()
@@ -55,12 +55,6 @@ async def create_nutritionist_chat_session(
     payload: CreateChatSessionRequest,
     token: str = Depends(get_bearer_token),
 ) -> dict:
-    if not payload.patient_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="patient_id e obrigatorio para chats profissionais.",
-        )
-
     workspace = SupabaseWorkspaceService()
     return await workspace.create_authorized_nutritionist_chat(
         token,
@@ -148,12 +142,6 @@ async def send_nutritionist_chat_message(
     payload: SendChatMessageRequest,
     token: str = Depends(get_bearer_token),
 ) -> StreamingResponse:
-    if not payload.patient_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="patient_id e obrigatorio para chats profissionais.",
-        )
-
     workspace = SupabaseWorkspaceService()
     context_service = ChatContextService(workspace)
     context, chat, sender = await context_service.resolve_nutritionist_context(

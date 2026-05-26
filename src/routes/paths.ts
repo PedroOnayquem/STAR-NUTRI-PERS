@@ -1,5 +1,7 @@
 import type { UserRole } from '../features/auth/types'
 
+export const changePasswordPath = '/auth/change-password'
+
 export function getRolePath(role: UserRole) {
   const paths: Record<UserRole, string> = {
     admin: '/admin',

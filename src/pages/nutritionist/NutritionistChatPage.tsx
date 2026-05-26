@@ -1,7 +1,5 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Users } from 'lucide-react'
-import { EmptyState } from '../../components/ui/EmptyState'
 import { PageSkeleton } from '../../components/ui/Skeleton'
 import { ChatExperience } from '../../features/chat/components/ChatExperience'
 import { useAuth } from '../../features/auth/useAuth'
@@ -22,30 +20,15 @@ export function NutritionistChatPage() {
   if (query.isLoading) return <PageSkeleton />
   if (query.error) throw query.error
 
-  if (patients.length === 0) {
-    return (
-      <EmptyState
-        description="Cadastre pacientes para usar o chat com contexto clinico."
-        icon={<Users size={22} />}
-        title="Nenhum paciente cadastrado"
-      />
-    )
-  }
-
-  const focusedPatientId = patients.some((patient) => patient.id === selectedPatientId)
-    ? selectedPatientId
-    : patients[0]?.id ?? null
-
   return (
     <ChatExperience
       externalQueryKey={['nutritionist-workspace']}
-      key={focusedPatientId}
       onPatientChange={setSelectedPatientId}
-      patientId={focusedPatientId}
+      patientId={selectedPatientId}
       patients={patients}
       patientName={
-        patients.find((patient) => patient.id === focusedPatientId)?.profile
-          ?.full_name ?? 'Paciente'
+        patients.find((patient) => patient.id === selectedPatientId)?.profile
+          ?.full_name ?? 'Chat geral'
       }
       scope="nutritionist"
     />

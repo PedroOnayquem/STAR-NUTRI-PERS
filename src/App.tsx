@@ -10,12 +10,14 @@ import { AuthProvider } from './features/auth/AuthContext'
 import { AuthLayout } from './features/auth/pages/AuthLayout'
 import {
   FullPageLoading,
+  PasswordChangeRoute,
   ProtectedRoute,
   PublicOnlyRoute,
   RoleRedirect,
 } from './routes/routeGuards'
 
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })))
+const ChangeTemporaryPasswordPage = lazy(() => import('./features/auth/pages/ChangeTemporaryPasswordPage').then((module) => ({ default: module.ChangeTemporaryPasswordPage })))
 const ForgotPasswordPage = lazy(() => import('./features/auth/pages/ForgotPasswordPage').then((module) => ({ default: module.ForgotPasswordPage })))
 const LoginPage = lazy(() => import('./features/auth/pages/LoginPage').then((module) => ({ default: module.LoginPage })))
 const NutritionistChatPage = lazy(() => import('./pages/nutritionist/NutritionistChatPage').then((module) => ({ default: module.NutritionistChatPage })))
@@ -66,6 +68,17 @@ function App() {
             />
 
             <Route element={<ProfileMissingPage />} path="/auth/profile-missing" />
+
+            <Route element={<PasswordChangeRoute />}>
+              <Route
+                element={
+                  <AuthLayout isDark={isDark} onToggleTheme={toggleTheme}>
+                    <ChangeTemporaryPasswordPage />
+                  </AuthLayout>
+                }
+                path="/auth/change-password"
+              />
+            </Route>
 
             <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
               <Route

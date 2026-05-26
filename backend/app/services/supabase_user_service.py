@@ -135,6 +135,7 @@ class SupabaseUserService:
                         "user_metadata": {
                             "full_name": payload.full_name,
                             "role": "patient",
+                            "must_change_password": True,
                         },
                     },
                 )

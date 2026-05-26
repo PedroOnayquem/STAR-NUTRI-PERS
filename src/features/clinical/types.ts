@@ -122,7 +122,7 @@ export type WorkoutRecord = {
 
 export type ChatSessionRecord = {
   id: string
-  patient_id: string
+  patient_id: string | null
   nutritionist_id?: string
   title: string | null
   created_at: string

@@ -10,15 +10,19 @@ import {
 import { supabase } from '../../lib/supabase'
 import {
   getInitialSession,
+  needsPasswordChange,
   requestPasswordReset,
   signIn,
   signOut,
+  updatePassword,
 } from './services/authService'
 import { getCurrentProfile } from './services/profileService'
 import type {
   AuthProfile,
+  ChangePasswordInput,
   ForgotPasswordInput,
   LoginInput,
+  LoginResult,
 } from './types'
 import { AuthContext, type AuthContextValue } from './authContextValue'
 
@@ -33,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     promise: Promise<AuthProfile | null>
     userId: string
   } | null>(null)
+  const requiresPasswordChange = needsPasswordChange(session?.user)
 
   const loadProfile = useCallback(async (
     nextSession: Session | null,
@@ -118,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [loadProfile])
 
-  const login = useCallback(async (input: LoginInput) => {
+  const login = useCallback(async (input: LoginInput): Promise<LoginResult> => {
     setError(null)
     const { session: nextSession } = await signIn(input)
     setSession(nextSession)
@@ -130,7 +135,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Usuario sem perfil ativo cadastrado.')
     }
 
-    return nextProfile
+    return {
+      profile: nextProfile,
+      requiresPasswordChange: needsPasswordChange(nextSession?.user),
+    }
+  }, [loadProfile])
+
+  const changePassword = useCallback(async (input: ChangePasswordInput) => {
+    setError(null)
+    await updatePassword(input)
+    const nextSession = await getInitialSession()
+    setSession(nextSession)
+    return await loadProfile(nextSession)
   }, [loadProfile])
 
   const recoverPassword = useCallback(async (input: ForgotPasswordInput) => {
@@ -157,13 +173,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       loading,
       profileLoading,
+      requiresPasswordChange,
       error,
+      changePassword,
       login,
       recoverPassword,
       logout,
       refreshProfile,
     }),
     [
+      changePassword,
       error,
       loading,
       login,
@@ -172,6 +191,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profileLoading,
       recoverPassword,
       refreshProfile,
+      requiresPasswordChange,
       session,
     ],
   )

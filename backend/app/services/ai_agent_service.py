@@ -54,6 +54,9 @@ class AiAgentService:
         user_message_record: dict,
     ) -> list[dict]:
         profile = await self.workspace.get_authenticated_profile(token)
+        if chat_scope == "nutritionist" and not context.get("patient"):
+            return []
+
         allowed_tools = (
             NUTRITIONIST_TOOLS if chat_scope == "nutritionist" else PATIENT_TOOLS
         )

@@ -49,11 +49,27 @@ import {
 type ChatExperienceProps = {
   className?: string
   externalQueryKey?: unknown[]
-  onPatientChange?: (patientId: string) => void
+  onPatientChange?: (patientId: string | null) => void
   patientId?: string | null
   patientName?: string
   patients?: PatientRecord[]
   scope: ChatScope
+}
+
+type PatientOption = {
+  email: string
+  id: string | null
+  isGeneral?: boolean
+  name: string
+  objective: string
+}
+
+const GENERAL_CHAT_OPTION: PatientOption = {
+  email: '',
+  id: null,
+  isGeneral: true,
+  name: 'Chat geral',
+  objective: 'Sem paciente especifico',
 }
 
 export function ChatExperience({
@@ -87,12 +103,15 @@ export function ChatExperience({
 
   const patientOptions = useMemo(
     () => {
-      const mapped = (patients ?? []).map((patient) => ({
-        email: patient.profile?.email ?? '',
-        id: patient.id,
-        name: patient.profile?.full_name ?? 'Paciente',
-        objective: patient.objective ?? '',
-      }))
+      const mapped = (patients ?? []).map(
+        (patient) =>
+          ({
+            email: patient.profile?.email ?? '',
+            id: patient.id,
+            name: patient.profile?.full_name ?? 'Paciente',
+            objective: patient.objective ?? '',
+          }) satisfies PatientOption,
+      )
 
       if (mapped.length > 0) return mapped
 
@@ -107,26 +126,56 @@ export function ChatExperience({
     },
     [patientId, patientName, patients],
   )
+  const patientMenuOptions = useMemo(
+    () =>
+      isProfessional
+        ? [GENERAL_CHAT_OPTION, ...patientOptions]
+        : patientOptions,
+    [isProfessional, patientOptions],
+  )
   const selectedPatient =
-    patientOptions.find((patient) => patient.id === patientId) ?? patientOptions[0]
+    patientMenuOptions.find((patient) => patient.id === patientId) ??
+    (isProfessional ? GENERAL_CHAT_OPTION : patientOptions[0])
   const selectedPatientName = selectedPatient?.name ?? patientName ?? 'Paciente'
-  const focusedPatientId = selectedPatient?.id ?? patientId ?? ''
-  const hasRequiredFocus = !isProfessional || Boolean(patientId)
+  const focusedPatientId = selectedPatient?.id ?? patientId ?? null
+  const isGeneralProfessionalChat = isProfessional && !patientId
+  const hasRequiredFocus = !isProfessional || Boolean(selectedPatient)
   const currentSession = chat.sessions.find(
     (session) => session.id === chat.activeSessionId,
   )
   const currentTitle = currentSession?.title || 'Nova conversa'
+  const patientNameById = useMemo(
+    () =>
+      Object.fromEntries(
+        patientOptions.map((patient) => [patient.id, patient.name]),
+      ) as Record<string, string>,
+    [patientOptions],
+  )
+  const patientLabelBySessionId = useMemo(
+    () =>
+      Object.fromEntries(
+        chat.sessions.map((session) => [
+          session.id,
+          session.patient_id
+            ? patientNameById[session.patient_id] ?? 'Paciente'
+            : GENERAL_CHAT_OPTION.name,
+        ]),
+      ),
+    [chat.sessions, patientNameById],
+  )
   const filteredSessions = useMemo(() => {
     const term = deferredConversationSearch.trim().toLowerCase()
     if (!term) return chat.sessions
 
     return chat.sessions.filter((session) => {
       const title = session.title?.toLowerCase() ?? ''
-      const patient = selectedPatientName.toLowerCase()
+      const patient = (
+        patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name
+      ).toLowerCase()
       const date = formatSessionDate(session).toLowerCase()
       return title.includes(term) || patient.includes(term) || date.includes(term)
     })
-  }, [chat.sessions, deferredConversationSearch, selectedPatientName])
+  }, [chat.sessions, deferredConversationSearch, patientLabelBySessionId])
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -181,9 +230,9 @@ export function ChatExperience({
           currentSessionId={chat.activeSessionId}
           isLoading={chat.isLoading}
           onCreateSession={chat.createSession}
+          patientLabelBySessionId={patientLabelBySessionId}
           onSearch={setConversationSearch}
           onSelectSession={chat.selectSession}
-          patientName={isProfessional ? selectedPatientName : 'Chat pessoal'}
           search={conversationSearch}
           sessions={filteredSessions}
         />
@@ -194,7 +243,7 @@ export function ChatExperience({
             onPatientChange={onPatientChange}
             patientId={focusedPatientId}
             patientName={selectedPatientName}
-            patients={patientOptions}
+            patients={patientMenuOptions}
             scope={scope}
           />
 
@@ -211,12 +260,16 @@ export function ChatExperience({
                 <ChatEmpty
                   description={
                     isProfessional
-                      ? 'Pergunte sobre evolucao, aderencia ou pontos de atencao.'
+                      ? isGeneralProfessionalChat
+                        ? 'Converse sobre condutas gerais, materiais educativos e organizacao do consultorio sem depender de um paciente especifico.'
+                        : 'Pergunte sobre evolucao, aderencia ou pontos de atencao.'
                       : 'Pergunte sobre sua dieta ativa, treino, rotina, compras ou organizacao do dia.'
                   }
                   title={
                     isProfessional
-                      ? `Chat profissional para ${selectedPatientName}`
+                      ? isGeneralProfessionalChat
+                        ? 'Chat profissional geral'
+                        : `Chat profissional para ${selectedPatientName}`
                       : 'Seu chat pessoal com IA'
                   }
                 />
@@ -265,7 +318,9 @@ export function ChatExperience({
             placeholder={
               hasRequiredFocus
                 ? isProfessional
-                  ? 'Mensagem para o Star Nutri...'
+                  ? isGeneralProfessionalChat
+                    ? 'Mensagem profissional geral para o Star Nutri...'
+                    : 'Mensagem para o Star Nutri...'
                   : 'Pergunte sobre sua rotina...'
                 : 'Selecione um paciente para conversar'
             }
@@ -285,9 +340,9 @@ function ChatSidebar({
   currentSessionId,
   isLoading,
   onCreateSession,
+  patientLabelBySessionId,
   onSearch,
   onSelectSession,
-  patientName,
   search,
   sessions,
 }: {
@@ -296,9 +351,9 @@ function ChatSidebar({
   currentSessionId: string | null
   isLoading: boolean
   onCreateSession: () => void
+  patientLabelBySessionId: Record<string, string>
   onSearch: (value: string) => void
   onSelectSession: (sessionId: string) => void
-  patientName: string
   search: string
   sessions: ChatSessionRecord[]
 }) {
@@ -360,7 +415,8 @@ function ChatSidebar({
                   {session.title || 'Nova conversa'}
                 </span>
                 <span className="mt-1 block truncate text-xs text-slate-500 group-hover:text-slate-400">
-                  {patientName} · {formatSessionDate(session)}
+                  {patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name} -{' '}
+                  {formatSessionDate(session)}
                 </span>
               </button>
             ))}
@@ -380,10 +436,10 @@ function ChatTopbar({
   scope,
 }: {
   currentTitle: string
-  onPatientChange?: (patientId: string) => void
-  patientId: string
+  onPatientChange?: (patientId: string | null) => void
+  patientId: string | null
   patientName: string
-  patients: Array<{ email: string; id: string; name: string; objective: string }>
+  patients: PatientOption[]
   scope: ChatScope
 }) {
   const [patientMenuOpen, setPatientMenuOpen] = useState(false)
@@ -430,11 +486,11 @@ function PatientFocusMenu({
   patients,
   scope,
 }: {
-  onChange: (patientId: string) => void
+  onChange: (patientId: string | null) => void
   onOpenChange: (open: boolean) => void
   open: boolean
-  patientId: string
-  patients: Array<{ email: string; id: string; name: string; objective: string }>
+  patientId: string | null
+  patients: PatientOption[]
   scope: ChatScope
 }) {
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? patients[0]
@@ -467,7 +523,7 @@ function PatientFocusMenu({
     onOpenChange(nextOpen)
   }
 
-  function selectPatient(nextPatientId: string) {
+  function selectPatient(nextPatientId: string | null) {
     onChange(nextPatientId)
     setOpen(false)
   }
@@ -529,6 +585,9 @@ function PatientFocusMenu({
         onKeyDown={handleTriggerKeyDown}
         type="button"
       >
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan-300/12 text-[10px] font-black text-cyan-100">
+          {selectedPatient?.isGeneral ? 'IA' : getInitials(selectedPatient?.name ?? 'P')}
+        </span>
         <span className="block min-w-0 flex-1 truncate text-sm font-medium">
           {selectedPatient?.name ?? 'Selecionar paciente'}
         </span>
@@ -605,11 +664,14 @@ function PatientFocusMenu({
                                 ? 'bg-cyan-300/[0.08] text-white'
                                 : 'text-slate-300 hover:bg-cyan-300/[0.07] hover:text-white',
                           )}
-                          key={patient.id}
+                          key={patient.id ?? 'general'}
                           onClick={() => selectPatient(patient.id)}
                           onMouseEnter={() => setActiveIndex(index)}
                           type="button"
                         >
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-300/10 text-[10px] font-black text-cyan-100">
+                            {patient.isGeneral ? 'IA' : getInitials(patient.name)}
+                          </span>
                           <span className="min-w-0 flex-1 truncate font-medium">
                             {patient.name}
                           </span>
@@ -826,6 +888,15 @@ function ReasoningMenu({
       </AnimatePresence>
     </div>
   )
+}
+
+function getInitials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'SN'
 }
 
 function reasoningDotClass(level: AiReasoningLevel) {

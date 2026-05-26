@@ -2,24 +2,32 @@ import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import type { UserRole } from '../features/auth/types'
 import { useAuth } from '../features/auth/useAuth'
-import { getRolePath } from './paths'
+import { changePasswordPath, getRolePath } from './paths'
 
 export function PublicOnlyRoute({ children }: { children: ReactNode }) {
-  const { loading, profile, session } = useAuth()
+  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
 
-  if (loading) {
+  if (loading || profileLoading) {
     return <FullPageLoading />
   }
 
-  if (session && profile) {
-    return <Navigate replace to={getRolePath(profile.role)} />
+  if (session) {
+    if (requiresPasswordChange) {
+      return <Navigate replace to={changePasswordPath} />
+    }
+
+    if (profile) {
+      return <Navigate replace to={getRolePath(profile.role)} />
+    }
+
+    return <Navigate replace to="/auth/profile-missing" />
   }
 
   return children
 }
 
 export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) {
-  const { loading, profile, profileLoading, session } = useAuth()
+  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
   const location = useLocation()
 
   if (loading || profileLoading) {
@@ -28,6 +36,10 @@ export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) 
 
   if (!session) {
     return <Navigate replace state={{ from: location }} to="/login" />
+  }
+
+  if (requiresPasswordChange) {
+    return <Navigate replace to={changePasswordPath} />
   }
 
   if (!profile) {
@@ -42,7 +54,7 @@ export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) 
 }
 
 export function RoleRedirect() {
-  const { loading, profile, profileLoading, session } = useAuth()
+  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
 
   if (loading || profileLoading) {
     return <FullPageLoading />
@@ -52,11 +64,37 @@ export function RoleRedirect() {
     return <Navigate replace to="/login" />
   }
 
+  if (requiresPasswordChange) {
+    return <Navigate replace to={changePasswordPath} />
+  }
+
   if (!profile) {
     return <Navigate replace to="/auth/profile-missing" />
   }
 
   return <Navigate replace to={getRolePath(profile.role)} />
+}
+
+export function PasswordChangeRoute() {
+  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
+
+  if (loading || profileLoading) {
+    return <FullPageLoading />
+  }
+
+  if (!session) {
+    return <Navigate replace to="/login" />
+  }
+
+  if (!requiresPasswordChange) {
+    if (!profile) {
+      return <Navigate replace to="/auth/profile-missing" />
+    }
+
+    return <Navigate replace to={getRolePath(profile.role)} />
+  }
+
+  return <Outlet />
 }
 
 export function FullPageLoading() {
