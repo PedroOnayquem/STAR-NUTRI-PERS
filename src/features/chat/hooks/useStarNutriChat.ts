@@ -31,12 +31,16 @@ export function useStarNutriChat({
   const [error, setError] = useState<string | null>(null)
 
   const sessionsQueryKey = useMemo(
-    () => ['chat-sessions', scope, patientId ?? 'me'],
+    () => [
+      'chat-sessions',
+      scope,
+      patientId ?? (scope === 'nutritionist' ? 'general' : 'me'),
+    ],
     [patientId, scope],
   )
   const canUseChat = Boolean(
     session &&
-      ((scope === 'nutritionist' && profile?.role === 'nutritionist' && patientId) ||
+      ((scope === 'nutritionist' && profile?.role === 'nutritionist') ||
         (scope === 'patient' && profile?.role === 'patient')),
   )
 
@@ -101,12 +105,15 @@ export function useStarNutriChat({
   const createSessionMutation = useMutation({
     mutationFn: () => {
       if (!canUseChat) {
-        throw new Error('Selecione um paciente para criar uma conversa.')
+        throw new Error('Nao foi possivel criar uma conversa agora.')
       }
 
       return createChatSession(session, scope, {
         patientId,
-        title: 'Nova conversa',
+        title:
+          scope === 'nutritionist' && !patientId
+            ? 'Nova conversa geral'
+            : 'Nova conversa',
       })
     },
     onSuccess: (created) => {
@@ -126,7 +133,7 @@ export function useStarNutriChat({
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
       if (!canUseChat) {
-        throw new Error('Selecione um paciente para iniciar o chat.')
+        throw new Error('Nao foi possivel iniciar o chat agora.')
       }
 
       setError(null)

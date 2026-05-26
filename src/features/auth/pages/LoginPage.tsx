@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { Button } from '../../../components/ui/Button'
 import { Card } from '../../../components/ui/Card'
 import { Input } from '../../../components/ui/Input'
-import { getRolePath } from '../../../routes/paths'
+import { changePasswordPath, getRolePath } from '../../../routes/paths'
 import type { LoginInput } from '../types'
 import { useAuth } from '../useAuth'
 import { validateLogin } from '../validation'
@@ -32,10 +32,15 @@ export function LoginPage() {
 
     setLoading(true)
     try {
-      const profile = await login(form)
+      const result = await login(form)
+      if (result.requiresPasswordChange) {
+        navigate(changePasswordPath, { replace: true })
+        return
+      }
+
       const redirectTo =
         (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ??
-        getRolePath(profile.role)
+        getRolePath(result.profile.role)
       navigate(redirectTo, { replace: true })
     } catch (caught) {
       setFeedback(caught instanceof Error ? caught.message : 'Nao foi possivel entrar.')

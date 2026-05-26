@@ -18,12 +18,23 @@ export type AuthState = {
   profile: AuthProfile | null
   loading: boolean
   profileLoading: boolean
+  requiresPasswordChange: boolean
   error: string | null
 }
 
 export type LoginInput = {
   email: string
   password: string
+}
+
+export type ChangePasswordInput = {
+  password: string
+  confirmPassword: string
+}
+
+export type LoginResult = {
+  profile: AuthProfile
+  requiresPasswordChange: boolean
 }
 
 export type RegisterPatientInput = {

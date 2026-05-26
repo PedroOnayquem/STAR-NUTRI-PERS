@@ -77,7 +77,7 @@ export function AuthenticatedLayout({
         <nav className="mt-6 space-y-1.5">
           {navItems.map((item) => (
             <NavLink
-              active={location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)}
+              active={isNavItemActive(location.pathname, item.to, navItems)}
               icon={item.icon}
               key={item.to}
               label={item.label}
@@ -124,7 +124,7 @@ export function AuthenticatedLayout({
               <Link
                 className={cn(
                   'inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition',
-                  location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+                  isNavItemActive(location.pathname, item.to, navItems)
                     ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950'
                     : 'bg-white text-slate-700 shadow-sm dark:bg-white/10 dark:text-slate-200',
                 )}
@@ -149,6 +149,32 @@ export function AuthenticatedLayout({
       </div>
     </div>
   )
+}
+
+function isNavItemActive(
+  pathname: string,
+  currentTo: string,
+  navItems: Array<{ to: string }>,
+) {
+  if (pathname === currentTo) {
+    return true
+  }
+
+  if (!pathname.startsWith(`${currentTo}/`)) {
+    return false
+  }
+
+  return !navItems.some((item) => {
+    if (item.to === currentTo) {
+      return false
+    }
+
+    const isMoreSpecific = item.to.startsWith(`${currentTo}/`)
+    const matchesPath =
+      pathname === item.to || pathname.startsWith(`${item.to}/`)
+
+    return isMoreSpecific && matchesPath
+  })
 }
 
 function NavLink({

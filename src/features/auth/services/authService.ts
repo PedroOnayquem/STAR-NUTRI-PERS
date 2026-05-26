@@ -1,5 +1,10 @@
+import type { User } from '@supabase/supabase-js'
 import { supabase } from '../../../lib/supabase'
-import type { ForgotPasswordInput, LoginInput } from '../types'
+import type {
+  ChangePasswordInput,
+  ForgotPasswordInput,
+  LoginInput,
+} from '../types'
 
 function assertSupabase() {
   if (!supabase) {
@@ -62,4 +67,34 @@ export async function getInitialSession() {
   }
 
   return data.session
+}
+
+export function needsPasswordChange(user: User | null | undefined) {
+  const flag = user?.user_metadata?.must_change_password
+  return flag === true || flag === 'true'
+}
+
+export async function updatePassword(input: ChangePasswordInput) {
+  const client = assertSupabase()
+  const currentUserResponse = await client.auth.getUser()
+
+  if (currentUserResponse.error) {
+    throw new Error(currentUserResponse.error.message)
+  }
+
+  const currentMetadata = currentUserResponse.data.user?.user_metadata ?? {}
+  const { data, error } = await client.auth.updateUser({
+    password: input.password,
+    data: {
+      ...currentMetadata,
+      must_change_password: false,
+      password_changed_at: new Date().toISOString(),
+    },
+  })
+
+  if (error) {
+    throw new Error(error.message)
+  }
+
+  return data.user
 }

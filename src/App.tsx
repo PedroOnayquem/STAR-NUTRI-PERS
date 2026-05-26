@@ -8,6 +8,7 @@ import {
 import { AuthenticatedLayout } from './components/layout/AuthenticatedLayout'
 import { AuthProvider } from './features/auth/AuthContext'
 import { AuthLayout } from './features/auth/pages/AuthLayout'
+import { ChangeTemporaryPasswordPage } from './features/auth/pages/ChangeTemporaryPasswordPage'
 import { ForgotPasswordPage } from './features/auth/pages/ForgotPasswordPage'
 import { LoginPage } from './features/auth/pages/LoginPage'
 import { ProfileMissingPage } from './features/auth/pages/ProfileMissingPage'
@@ -19,6 +20,7 @@ import { PatientsPage } from './pages/nutritionist/PatientsPage'
 import { PatientWorkspacePage } from './pages/patient/PatientWorkspacePage'
 import {
   ProtectedRoute,
+  PasswordChangeRoute,
   PublicOnlyRoute,
   RoleRedirect,
 } from './routes/routeGuards'
@@ -63,6 +65,17 @@ function App() {
           />
 
           <Route element={<ProfileMissingPage />} path="/auth/profile-missing" />
+
+          <Route element={<PasswordChangeRoute />}>
+            <Route
+              element={
+                <AuthLayout isDark={isDark} onToggleTheme={toggleTheme}>
+                  <ChangeTemporaryPasswordPage />
+                </AuthLayout>
+              }
+              path="/auth/change-password"
+            />
+          </Route>
 
           <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
             <Route

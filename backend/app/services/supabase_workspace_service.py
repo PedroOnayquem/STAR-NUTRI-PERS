@@ -773,17 +773,19 @@ class SupabaseWorkspaceService:
     async def list_nutritionist_chats_for_patient(
         self,
         nutritionist_id: str,
-        patient_id: str,
+        patient_id: str | None,
     ) -> list[dict]:
+        params = {
+            "nutritionist_id": f"eq.{nutritionist_id}",
+            "select": "*",
+            "order": "updated_at.desc,created_at.desc",
+        }
+        params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
+
         return await self._request(
             "GET",
             "/rest/v1/nutritionist_chats",
-            params={
-                "nutritionist_id": f"eq.{nutritionist_id}",
-                "patient_id": f"eq.{patient_id}",
-                "select": "*",
-                "order": "updated_at.desc,created_at.desc",
-            },
+            params=params,
         )
 
     async def list_patient_chats_for_patient(self, patient_id: str) -> list[dict]:
@@ -800,15 +802,22 @@ class SupabaseWorkspaceService:
     async def list_authorized_nutritionist_chats(
         self,
         token: str,
-        patient_id: str,
+        patient_id: str | None = None,
     ) -> list[dict]:
-        _, nutritionist, patient = await self.resolve_nutritionist_patient(
-            token,
-            patient_id,
-        )
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas acessam chats profissionais.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        if patient_id:
+            await self.resolve_nutritionist_patient(token, patient_id)
+
         return await self.list_nutritionist_chats_for_patient(
             nutritionist["id"],
-            patient["id"],
+            patient_id,
         )
 
     async def list_authorized_patient_chats(self, token: str) -> list[dict]:
@@ -818,7 +827,7 @@ class SupabaseWorkspaceService:
     async def create_nutritionist_chat(
         self,
         nutritionist_id: str,
-        patient_id: str,
+        patient_id: str | None,
         title: str | None = None,
     ) -> dict:
         rows = await self._request(
@@ -827,7 +836,12 @@ class SupabaseWorkspaceService:
             json={
                 "nutritionist_id": nutritionist_id,
                 "patient_id": patient_id,
-                "title": title or "Nova conversa profissional",
+                "title": title
+                or (
+                    "Nova conversa profissional"
+                    if patient_id
+                    else "Nova conversa geral"
+                ),
             },
             prefer="return=representation",
         )
@@ -852,16 +866,28 @@ class SupabaseWorkspaceService:
     async def create_authorized_nutritionist_chat(
         self,
         token: str,
-        patient_id: str,
+        patient_id: str | None = None,
         title: str | None = None,
     ) -> dict:
-        _, nutritionist, patient = await self.resolve_nutritionist_patient(
-            token,
-            patient_id,
-        )
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas criam chats profissionais.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        resolved_patient_id: str | None = None
+        if patient_id:
+            _, _, patient = await self.resolve_nutritionist_patient(
+                token,
+                patient_id,
+            )
+            resolved_patient_id = patient["id"]
+
         return await self.create_nutritionist_chat(
             nutritionist["id"],
-            patient["id"],
+            resolved_patient_id,
             title,
         )
 
@@ -886,8 +912,7 @@ class SupabaseWorkspaceService:
             "select": "*",
             "limit": "1",
         }
-        if patient_id:
-            params["patient_id"] = f"eq.{patient_id}"
+        params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
 
         rows = await self._request(
             "GET",
@@ -924,7 +949,7 @@ class SupabaseWorkspaceService:
     async def ensure_nutritionist_chat(
         self,
         nutritionist_id: str,
-        patient_id: str,
+        patient_id: str | None,
         chat_id: str | None,
     ) -> dict:
         if chat_id:
@@ -954,9 +979,11 @@ class SupabaseWorkspaceService:
         current_title = (chat.get("title") or "").strip()
         default_titles = {
             "Nova conversa",
+            "Nova conversa geral",
             "Nova conversa pessoal",
             "Nova conversa profissional",
             "Acompanhamento IA",
+            "Conversa geral",
             "Conversa pessoal",
             "Conversa profissional",
         }

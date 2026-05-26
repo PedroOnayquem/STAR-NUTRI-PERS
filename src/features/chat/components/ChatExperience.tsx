@@ -42,11 +42,27 @@ import {
 type ChatExperienceProps = {
   className?: string
   externalQueryKey?: unknown[]
-  onPatientChange?: (patientId: string) => void
+  onPatientChange?: (patientId: string | null) => void
   patientId?: string | null
   patientName?: string
   patients?: PatientRecord[]
   scope: ChatScope
+}
+
+type PatientOption = {
+  email: string
+  id: string | null
+  isGeneral?: boolean
+  name: string
+  objective: string
+}
+
+const GENERAL_CHAT_OPTION: PatientOption = {
+  email: '',
+  id: null,
+  isGeneral: true,
+  name: 'Chat geral',
+  objective: 'Sem paciente especifico',
 }
 
 export function ChatExperience({
@@ -72,34 +88,68 @@ export function ChatExperience({
 
   const patientOptions = useMemo(
     () =>
-      (patients ?? []).map((patient) => ({
-        email: patient.profile?.email ?? '',
-        id: patient.id,
-        name: patient.profile?.full_name ?? 'Paciente',
-        objective: patient.objective ?? '',
-      })),
+      (patients ?? []).map(
+        (patient) =>
+          ({
+            email: patient.profile?.email ?? '',
+            id: patient.id,
+            name: patient.profile?.full_name ?? 'Paciente',
+            objective: patient.objective ?? '',
+          }) satisfies PatientOption,
+      ),
     [patients],
   )
-  const selectedPatient = patientOptions.find((patient) => patient.id === patientId)
-  const canSelectPatient = Boolean(onPatientChange && patientOptions.length > 0)
+  const patientMenuOptions = useMemo(
+    () =>
+      scope === 'nutritionist'
+        ? [GENERAL_CHAT_OPTION, ...patientOptions]
+        : patientOptions,
+    [patientOptions, scope],
+  )
+  const selectedPatient =
+    patientMenuOptions.find((patient) => patient.id === patientId) ??
+    (scope === 'nutritionist' ? GENERAL_CHAT_OPTION : patientOptions[0])
+  const canSelectPatient = Boolean(onPatientChange && patientMenuOptions.length > 0)
   const selectedPatientName = selectedPatient?.name ?? patientName ?? 'Paciente'
   const isProfessional = scope === 'nutritionist'
-  const hasRequiredFocus = !isProfessional || !canSelectPatient || Boolean(patientId)
+  const isGeneralProfessionalChat = isProfessional && !patientId
+  const hasRequiredFocus = !isProfessional || !canSelectPatient || Boolean(selectedPatient)
   const currentSession = chat.sessions.find(
     (session) => session.id === chat.activeSessionId,
   )
   const currentTitle = currentSession?.title || 'Nova conversa'
+  const patientNameById = useMemo(
+    () =>
+      Object.fromEntries(
+        patientOptions.map((patient) => [patient.id, patient.name]),
+      ) as Record<string, string>,
+    [patientOptions],
+  )
+  const patientLabelBySessionId = useMemo(
+    () =>
+      Object.fromEntries(
+        chat.sessions.map((session) => [
+          session.id,
+          session.patient_id
+            ? patientNameById[session.patient_id] ?? 'Paciente'
+            : GENERAL_CHAT_OPTION.name,
+        ]),
+      ),
+    [chat.sessions, patientNameById],
+  )
   const filteredSessions = useMemo(() => {
     const term = conversationSearch.trim().toLowerCase()
     if (!term) return chat.sessions
 
     return chat.sessions.filter((session) => {
       const title = session.title?.toLowerCase() ?? ''
-      const patient = selectedPatientName.toLowerCase()
+      const patient = (
+        patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name
+      ).toLowerCase()
       const date = formatSessionDate(session).toLowerCase()
       return title.includes(term) || patient.includes(term) || date.includes(term)
     })
-  }, [chat.sessions, conversationSearch, selectedPatientName])
+  }, [chat.sessions, conversationSearch, patientLabelBySessionId])
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -116,7 +166,7 @@ export function ChatExperience({
   return (
     <div
       className={cn(
-        'h-[calc(100vh-8rem)] min-h-[700px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.08)] dark:border-white/10 dark:bg-slate-950 dark:shadow-none',
+        'h-[calc(100vh-8rem)] min-h-[700px] overflow-visible rounded-3xl border border-slate-200 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.08)] dark:border-white/10 dark:bg-slate-950 dark:shadow-none',
         className,
       )}
     >
@@ -127,9 +177,9 @@ export function ChatExperience({
           currentSessionId={chat.activeSessionId}
           isLoading={chat.isLoading}
           onCreateSession={chat.createSession}
+          patientLabelBySessionId={patientLabelBySessionId}
           onSearch={setConversationSearch}
           onSelectSession={chat.selectSession}
-          patientName={isProfessional ? selectedPatientName : 'Chat pessoal'}
           search={conversationSearch}
           sessions={filteredSessions}
         />
@@ -139,9 +189,9 @@ export function ChatExperience({
             currentTitle={currentTitle}
             onPatientChange={onPatientChange}
             onReasoningChange={setReasoningLevel}
-            patientId={patientId ?? ''}
+            patientId={patientId ?? null}
             patientName={selectedPatientName}
-            patients={patientOptions}
+            patients={patientMenuOptions}
             reasoningLevel={reasoningLevel}
             scope={scope}
           />
@@ -159,12 +209,16 @@ export function ChatExperience({
                 <ChatEmpty
                   description={
                     isProfessional
-                      ? 'Pergunte sobre evolucao, aderencia ou pontos de atencao.'
+                      ? isGeneralProfessionalChat
+                        ? 'Converse sobre condutas gerais, materiais educativos e organizacao do consultorio sem depender de um paciente especifico.'
+                        : 'Pergunte sobre evolucao, aderencia ou pontos de atencao.'
                       : 'Pergunte sobre sua dieta ativa, treino, rotina, compras ou organizacao do dia.'
                   }
                   title={
                     isProfessional
-                      ? `Chat profissional para ${selectedPatientName}`
+                      ? isGeneralProfessionalChat
+                        ? 'Chat profissional geral'
+                        : `Chat profissional para ${selectedPatientName}`
                       : 'Seu chat pessoal com IA'
                   }
                 />
@@ -227,7 +281,9 @@ export function ChatExperience({
                   placeholder={
                     hasRequiredFocus
                       ? isProfessional
-                        ? 'Mensagem profissional para o Star Nutri...'
+                        ? isGeneralProfessionalChat
+                          ? 'Mensagem profissional geral para o Star Nutri...'
+                          : 'Mensagem profissional para o Star Nutri...'
                         : 'Pergunte sobre sua rotina...'
                       : 'Selecione um paciente para conversar'
                   }
@@ -262,9 +318,9 @@ function ChatSidebar({
   currentSessionId,
   isLoading,
   onCreateSession,
+  patientLabelBySessionId,
   onSearch,
   onSelectSession,
-  patientName,
   search,
   sessions,
 }: {
@@ -273,9 +329,9 @@ function ChatSidebar({
   currentSessionId: string | null
   isLoading: boolean
   onCreateSession: () => void
+  patientLabelBySessionId: Record<string, string>
   onSearch: (value: string) => void
   onSelectSession: (sessionId: string) => void
-  patientName: string
   search: string
   sessions: ChatSessionRecord[]
 }) {
@@ -337,7 +393,8 @@ function ChatSidebar({
                   {session.title || 'Nova conversa'}
                 </span>
                 <span className="mt-1 block truncate text-xs text-slate-400">
-                  {patientName} · {formatSessionDate(session)}
+                  {patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name} -{' '}
+                  {formatSessionDate(session)}
                 </span>
               </button>
             ))}
@@ -359,11 +416,11 @@ function ChatTopbar({
   scope,
 }: {
   currentTitle: string
-  onPatientChange?: (patientId: string) => void
+  onPatientChange?: (patientId: string | null) => void
   onReasoningChange: (level: AiReasoningLevel) => void
-  patientId: string
+  patientId: string | null
   patientName: string
-  patients: Array<{ email: string; id: string; name: string; objective: string }>
+  patients: PatientOption[]
   reasoningLevel: AiReasoningLevel
   scope: ChatScope
 }) {
@@ -430,11 +487,11 @@ function PatientFocusMenu({
   patientId,
   patients,
 }: {
-  onChange: (patientId: string) => void
+  onChange: (patientId: string | null) => void
   onOpenChange: (open: boolean) => void
   open: boolean
-  patientId: string
-  patients: Array<{ email: string; id: string; name: string; objective: string }>
+  patientId: string | null
+  patients: PatientOption[]
 }) {
   const selectedPatient = patients.find((patient) => patient.id === patientId) ?? patients[0]
 
@@ -448,7 +505,7 @@ function PatientFocusMenu({
         type="button"
       >
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-xs font-black text-white shadow-[0_10px_24px_rgba(16,185,129,0.25)]">
-          {getInitials(selectedPatient?.name ?? 'P')}
+          {selectedPatient?.isGeneral ? 'IA' : getInitials(selectedPatient?.name ?? 'P')}
         </span>
         <span className="block min-w-0 flex-1 truncate text-sm font-black text-slate-950 dark:text-white">
           {selectedPatient?.name ?? 'Selecionar paciente'}
@@ -463,7 +520,7 @@ function PatientFocusMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-[min(92vw,380px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-slate-900">
+        <div className="absolute right-0 top-full z-50 mt-2 w-[min(92vw,380px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-slate-900">
           <div className="max-h-80 overflow-y-auto p-2">
             {patients.map((patient) => {
               const selected = patient.id === patientId
@@ -475,19 +532,28 @@ function PatientFocusMenu({
                       ? 'bg-emerald-50 text-emerald-950 ring-1 ring-emerald-200 dark:bg-emerald-400/10 dark:text-emerald-100 dark:ring-emerald-400/20'
                       : 'hover:bg-slate-50 dark:hover:bg-white/[0.06]',
                   )}
-                  key={patient.id}
+                  key={patient.id ?? 'general'}
                   onClick={() => onChange(patient.id)}
                   type="button"
                 >
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-xs font-black text-white dark:bg-white dark:text-slate-950">
-                    {getInitials(patient.name)}
+                  <span
+                    className={cn(
+                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-xs font-black text-white',
+                      patient.isGeneral
+                        ? 'bg-emerald-500'
+                        : 'bg-slate-950 dark:bg-white dark:text-slate-950',
+                    )}
+                  >
+                    {patient.isGeneral ? 'IA' : getInitials(patient.name)}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-black">
                       {patient.name}
                     </span>
                     <span className="mt-0.5 block truncate text-xs text-slate-500 dark:text-slate-400">
-                      {patient.objective || patient.email || 'Sem objetivo cadastrado'}
+                      {patient.isGeneral
+                        ? patient.objective
+                        : patient.objective || patient.email || 'Sem objetivo cadastrado'}
                     </span>
                   </span>
                   {selected && <Check className="text-emerald-600" size={17} />}
@@ -550,7 +616,7 @@ function ReasoningMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 z-30 mt-2 w-[min(92vw,340px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-slate-900">
+        <div className="absolute right-0 top-full z-50 mt-2 w-[min(92vw,340px)] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-slate-900">
           <div className="p-2">
             {AI_REASONING_LEVELS.map((level) => {
               const active = level.id === reasoningLevel
