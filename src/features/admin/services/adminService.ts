@@ -1,4 +1,5 @@
 import type { Session } from '@supabase/supabase-js'
+import { USER_MESSAGES, sanitizeUserMessage } from '../../../constants/messages'
 import { requireApiBaseUrl } from '../../../lib/api'
 
 export type CreateNutritionistInput = {
@@ -25,7 +26,7 @@ export async function createNutritionist(
   const apiBaseUrl = requireApiBaseUrl()
 
   if (!session?.access_token) {
-    throw new Error('Sessao de admin nao encontrada.')
+    throw new Error(USER_MESSAGES.missingSession)
   }
 
   let response: Response
@@ -47,9 +48,7 @@ export async function createNutritionist(
       }),
     })
   } catch {
-    throw new Error(
-      `Nao foi possivel conectar ao backend em ${apiBaseUrl}. Verifique se a API do Star Nutri esta no ar.`,
-    )
+    throw new Error(USER_MESSAGES.connectionError)
   }
 
   const body = await response.json().catch(() => null)
@@ -63,7 +62,7 @@ export async function createNutritionist(
           .join(' | ')
       : body?.detail
 
-    throw new Error(detail ?? 'Nao foi possivel cadastrar nutricionista.')
+    throw new Error(sanitizeUserMessage(detail, 'Não foi possível cadastrar nutricionista.'))
   }
 
   return body as CreatedNutritionist

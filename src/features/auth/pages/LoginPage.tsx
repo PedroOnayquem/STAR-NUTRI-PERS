@@ -43,7 +43,7 @@ export function LoginPage() {
         getRolePath(result.profile.role)
       navigate(redirectTo, { replace: true })
     } catch (caught) {
-      setFeedback(caught instanceof Error ? caught.message : 'Nao foi possivel entrar.')
+      setFeedback(caught instanceof Error ? caught.message : 'Não foi possível entrar.')
     } finally {
       setLoading(false)
     }
@@ -53,11 +53,11 @@ export function LoginPage() {
     <Card className="p-7" variant="glass">
       <div className="mb-7">
         <span className="inline-flex rounded-full border border-slate-200 bg-white/80 px-3 py-1 text-xs font-bold text-slate-600 shadow-sm dark:border-white/10 dark:bg-white/10 dark:text-slate-300">
-          Secure access
+          Acesso seguro
         </span>
         <h2 className="mt-4 text-3xl font-black tracking-tight">Entrar no Star Nutri</h2>
         <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-          Use sua conta para acessar o workspace correto por perfil.
+          Acesse sua conta para acompanhar pacientes, planos e evolução nutricional.
         </p>
         {redirectedFrom && (
           <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-300">
@@ -67,7 +67,7 @@ export function LoginPage() {
       </div>
 
       <form className="space-y-4" onSubmit={submit}>
-        <FieldError error={errors.email} icon={<Mail size={17} />} label="Email">
+        <FieldError error={errors.email} icon={<Mail size={17} />} label="E-mail">
           <Input
             autoComplete="email"
             onChange={(event) => setForm({ ...form, email: event.target.value })}
@@ -104,8 +104,7 @@ export function LoginPage() {
           Esqueci a senha
         </Link>
         <p className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 text-xs font-semibold leading-5 text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-400">
-          Contas seguem hierarquia: admin cria nutricionistas; nutricionistas
-          criam pacientes. Nao ha cadastro publico.
+          Pacientes recebem o acesso diretamente pelo nutricionista responsável.
         </p>
       </div>
     </Card>

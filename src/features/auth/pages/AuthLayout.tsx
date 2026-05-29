@@ -36,22 +36,22 @@ export function AuthLayout({
           <div className="relative z-10 max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-400/10 px-3 py-1 text-sm font-bold text-emerald-200 shadow-2xl shadow-emerald-950/40 backdrop-blur">
               <Sparkles size={14} />
-              Health tech SaaS com IA
+              Plataforma inteligente para nutrição
             </span>
             <h1 className="mt-6 text-5xl font-black leading-[1.02] tracking-normal xl:text-7xl">
-              Nutricao clinica com dados, clareza e inteligencia.
+              Nutrição clínica com dados, clareza e inteligência.
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-8 text-slate-300">
-              Uma experiencia premium para nutricionistas gerirem pacientes,
-              planos, metricas e acompanhamento com IA de forma segura.
+              Uma experiência premium para nutricionistas acompanharem pacientes,
+              planos, métricas e evolução com mais segurança.
             </p>
           </div>
 
           <div className="relative z-10 grid gap-3 xl:grid-cols-3">
             {[
-              { icon: <ShieldCheck size={18} />, label: 'RLS e perfis' },
-              { icon: <Activity size={18} />, label: 'Metricas vivas' },
-              { icon: <Bot size={18} />, label: 'ChatGPT ready' },
+              { icon: <ShieldCheck size={18} />, label: 'Acesso seguro' },
+              { icon: <Activity size={18} />, label: 'Métricas claras' },
+              { icon: <Bot size={18} />, label: 'Assistente integrado' },
             ].map((item) => (
               <div
                 className="rounded-2xl border border-white/10 bg-white/[0.06] p-4 shadow-2xl shadow-black/20 backdrop-blur"
@@ -100,7 +100,7 @@ function Brand({ dark = false }: { dark?: boolean }) {
           Star Nutri
         </p>
         <p className={dark ? 'text-xs text-slate-500 dark:text-slate-400' : 'text-xs text-slate-300'}>
-          Intelligent nutrition OS
+          Nutrição inteligente
         </p>
       </div>
     </div>

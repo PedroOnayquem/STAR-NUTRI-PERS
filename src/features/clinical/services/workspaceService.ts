@@ -2,12 +2,17 @@ import type { Session } from '@supabase/supabase-js'
 import { apiRequest } from '../../../lib/api'
 import type {
   AdminWorkspace,
+  NutritionistDashboard,
   NutritionistWorkspace,
   PatientContext,
 } from '../types'
 
 export function getNutritionistWorkspace(session: Session | null) {
   return apiRequest<NutritionistWorkspace>('/api/nutritionists/workspace', session)
+}
+
+export function getNutritionistDashboard(session: Session | null) {
+  return apiRequest<NutritionistDashboard>('/api/nutritionists/dashboard', session)
 }
 
 export function getNutritionistPatientContext(
@@ -52,6 +57,25 @@ export function deactivateNutritionistPatient(
     session,
     { method: 'DELETE' },
   )
+}
+
+export function getPatientImportSignedUrl(importId: string, session: Session | null) {
+  return apiRequest<{ signed_url: string }>(
+    `/api/nutritionists/imports/${importId}/signed-url`,
+    session,
+  )
+}
+
+export function getPatientImportFileSignedUrls(importId: string, session: Session | null) {
+  return apiRequest<{
+    files: Array<{
+      id: string
+      signed_url: string | null
+      original_file_name?: string | null
+      file_type?: string | null
+      order_index?: number | null
+    }>
+  }>(`/api/nutritionists/imports/${importId}/files/signed-urls`, session)
 }
 
 export function getPatientContext(session: Session | null) {

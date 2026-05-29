@@ -2,6 +2,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Activity,
   Bot,
+  CalendarDays,
   ChevronRight,
   LayoutDashboard,
   LogOut,
@@ -18,11 +19,12 @@ import { useAuth } from '../../features/auth/useAuth'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
+import { NotificationBell } from '../notifications/NotificationBell'
 
 const navByRole = {
   admin: [
-    { to: '/admin', label: 'Command center', icon: <Shield size={18} />, preload: () => import('../../pages/AdminPage') },
-    { to: '/admin/users', label: 'Usuarios', icon: <Users size={18} />, preload: () => import('../../pages/AdminPage') },
+    { to: '/admin', label: 'Painel administrativo', icon: <Shield size={18} />, preload: () => import('../../pages/AdminPage') },
+    { to: '/admin/users', label: 'Usuários', icon: <Users size={18} />, preload: () => import('../../pages/AdminPage') },
   ],
   nutritionist: [
     { to: '/nutritionist', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/nutritionist/NutritionistDashboardPage') },
@@ -33,8 +35,8 @@ const navByRole = {
     { to: '/patient', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
     { to: '/patient/diet', label: 'Minha dieta', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
     { to: '/patient/workout', label: 'Meu treino', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
-    { to: '/patient/metrics', label: 'Metricas', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
-    { to: '/patient/evolution', label: 'Evolucao', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/agenda', label: 'Agenda', icon: <CalendarDays size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
+    { to: '/patient/metrics', label: 'Métricas', icon: <Activity size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
     { to: '/patient/chat', label: 'Chat IA', icon: <Bot size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
     { to: '/patient/profile', label: 'Perfil', icon: <UserRound size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
   ],
@@ -51,6 +53,8 @@ export function AuthenticatedLayout({
   const navigate = useNavigate()
   const location = useLocation()
   const navItems = profile ? navByRole[profile.role] : []
+  const hideGlobalSearch =
+    profile?.role === 'nutritionist' && location.pathname === '/nutritionist'
 
   async function handleLogout() {
     await logout()
@@ -65,7 +69,7 @@ export function AuthenticatedLayout({
         <div className="mt-6 rounded-2xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-cyan-50 p-4 dark:border-emerald-400/20 dark:from-emerald-400/10 dark:to-cyan-400/10">
           <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
             <Sparkles size={16} />
-            <p className="text-xs font-black uppercase">Workspace ativo</p>
+            <p className="text-xs font-black uppercase">Conta ativa</p>
           </div>
           <p className="mt-2 text-sm font-bold">{profile?.fullName}</p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
@@ -94,14 +98,17 @@ export function AuthenticatedLayout({
               <div className="lg:hidden">
                 <Brand compact />
               </div>
-              <div className="hidden min-w-80 items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/80 px-3 py-2 text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-400 md:flex">
-                <Search size={17} />
-                <span className="text-sm">Buscar pacientes, metricas ou planos</span>
-              </div>
+              {!hideGlobalSearch && (
+                <div className="hidden min-w-80 items-center gap-3 rounded-2xl border border-slate-200/80 bg-white/80 px-3 py-2 text-slate-500 shadow-sm dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-400 md:flex">
+                  <Search size={17} />
+                  <span className="text-sm">Buscar pacientes, métricas ou planos</span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
               <Badge tone="green">Online</Badge>
+              <NotificationBell />
               <Button
                 aria-label="Alternar tema"
                 onClick={onToggleTheme}
@@ -224,7 +231,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
         <div>
           <p className="text-base font-black">Star Nutri</p>
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Nutrition intelligence
+            Nutrição inteligente
           </p>
         </div>
       )}

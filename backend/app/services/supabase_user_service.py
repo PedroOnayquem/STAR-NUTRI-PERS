@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 
 from ..core.config import settings
 from ..schemas.patients import CreatePatientRequest
+from .bioimpedance_metrics import imported_metrics_to_rows
 
 
 class SupabaseUserService:
@@ -40,7 +41,7 @@ class SupabaseUserService:
         except httpx.RequestError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel conectar ao Supabase Auth.",
+                detail="Não foi possível validar o acesso. Tente novamente em instantes.",
             ) from None
 
         if response.status_code >= 400:
@@ -58,7 +59,7 @@ class SupabaseUserService:
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authenticated user not found.",
+                detail="Usuário não encontrado.",
             )
 
         try:
@@ -85,7 +86,7 @@ class SupabaseUserService:
         except httpx.RequestError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel validar o nutricionista no Supabase.",
+                detail="Não foi possível validar o nutricionista. Entre novamente e tente de novo.",
             ) from None
 
         if response.status_code >= 400 or nutritionist_response.status_code >= 400:
@@ -189,13 +190,21 @@ class SupabaseUserService:
                 if patient_response.status_code >= 400:
                     await self._delete_auth_user(client, created_user_id)
                     self._raise_supabase_error(patient_response)
+
+                patient = patient_response.json()[0]
+
+                if payload.import_id:
+                    await self._finalize_patient_import(
+                        client=client,
+                        import_id=payload.import_id,
+                        nutritionist_id=nutritionist_id,
+                        patient_id=patient["id"],
+                    )
         except httpx.RequestError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel concluir a criacao no Supabase.",
+                detail="Não foi possível concluir o cadastro. Tente novamente em instantes.",
             ) from None
-
-        patient = patient_response.json()[0]
 
         return {
             "profile_id": created_user_id,
@@ -204,6 +213,59 @@ class SupabaseUserService:
             "full_name": payload.full_name,
             "role": "patient",
         }
+
+    async def _finalize_patient_import(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        import_id: str,
+        nutritionist_id: str,
+        patient_id: str,
+    ) -> None:
+        import_response = await client.get(
+            f"{self.supabase_url}/rest/v1/patient_imports",
+            headers=self.service_headers,
+            params={
+                "id": f"eq.{import_id}",
+                "nutritionist_id": f"eq.{nutritionist_id}",
+                "select": "*",
+                "limit": "1",
+            },
+        )
+        if import_response.status_code >= 400:
+            self._raise_supabase_error(import_response)
+
+        rows = import_response.json()
+        import_row = rows[0] if rows else None
+        if not import_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Importação de relatório não encontrada para este nutricionista.",
+            )
+
+        metrics = imported_metrics_to_rows(
+            payload=import_row.get("extracted_payload") or {},
+            patient_id=patient_id,
+            import_id=import_id,
+            source_type=import_row.get("source_type") or "bioimpedance_report",
+        )
+        if metrics:
+            metrics_response = await client.post(
+                f"{self.supabase_url}/rest/v1/patient_variable_metrics",
+                headers={**self.service_headers, "Prefer": "return=minimal"},
+                json=metrics,
+            )
+            if metrics_response.status_code >= 400:
+                self._raise_supabase_error(metrics_response)
+
+        import_update = await client.patch(
+            f"{self.supabase_url}/rest/v1/patient_imports",
+            headers={**self.service_headers, "Prefer": "return=minimal"},
+            params={"id": f"eq.{import_id}", "nutritionist_id": f"eq.{nutritionist_id}"},
+            json={"patient_id": patient_id, "status": "linked"},
+        )
+        if import_update.status_code >= 400:
+            self._raise_supabase_error(import_update)
 
     async def _delete_auth_user(self, client: httpx.AsyncClient, user_id: str) -> None:
         await client.delete(
@@ -223,7 +285,7 @@ class SupabaseUserService:
             or "duplicate" in normalized
         ):
             status_code = status.HTTP_409_CONFLICT
-            detail = "Este email ja esta cadastrado no Supabase Auth. Use outro email."
+            detail = "Este e-mail já está cadastrado. Use outro e-mail."
 
         raise HTTPException(status_code=status_code, detail=detail)
 

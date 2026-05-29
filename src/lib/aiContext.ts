@@ -19,21 +19,21 @@ type PatientAiContext = {
 
 export function buildPatientAiContext(context: PatientAiContext) {
   const diet = context.diet
-    ? `${context.diet.title}: ${context.diet.description}. Metas: ${context.diet.calories} kcal, ${context.diet.protein}g proteina, ${context.diet.carbs}g carboidratos, ${context.diet.fats}g gorduras.`
+    ? `${context.diet.title}: ${context.diet.description}. Metas: ${context.diet.calories} kcal, ${context.diet.protein}g proteína, ${context.diet.carbs}g carboidratos, ${context.diet.fats}g gorduras.`
     : 'Sem dieta ativa cadastrada.'
 
   const workout = context.workout
-    ? `${context.workout.title}: ${context.workout.description}. Frequencia: ${context.workout.frequencyPerWeek}x por semana.`
+    ? `${context.workout.title}: ${context.workout.description}. Frequência: ${context.workout.frequencyPerWeek}x por semana.`
     : 'Sem treino ativo cadastrado.'
 
   return {
-    model: 'ChatGPT',
+    model: 'Star Nutri IA',
     systemPrompt: [
-      'Voce e um assistente de acompanhamento nutricional.',
-      'Voce nao substitui o nutricionista nem um medico.',
-      'Voce deve responder com base no plano cadastrado pelo nutricionista.',
-      'Voce nao deve prescrever dieta, treino, medicamento ou diagnostico.',
-      'Se houver sintomas graves, oriente procurar atendimento medico.',
+      'Você é um assistente de acompanhamento nutricional.',
+      'Você não substitui o nutricionista nem um médico.',
+      'Você deve responder com base no plano cadastrado pelo nutricionista.',
+      'Você não deve prescrever dieta, treino, medicamento ou diagnóstico.',
+      'Se houver sintomas graves, oriente procurar atendimento médico.',
     ],
     patient: {
       name: context.patient.fullName,
@@ -65,22 +65,22 @@ export function generateGuardedAiReply(context: PatientAiContext, content: strin
     lowered.includes('mudar meu treino') ||
     lowered.includes('remedio')
   ) {
-    return 'Eu nao posso alterar sua dieta, treino ou sugerir medicacao. Posso te ajudar a entender o plano atual e organizar duvidas para sua nutricionista avaliar com seguranca.'
+    return 'Eu não posso alterar sua dieta, treino ou sugerir medicação. Posso te ajudar a entender o plano atual e organizar dúvidas para sua nutricionista avaliar com segurança.'
   }
 
   if (lowered.includes('dor forte') || lowered.includes('desmaio')) {
-    return 'Esse relato pode exigir avaliacao presencial. Procure atendimento medico imediatamente e avise sua nutricionista quando estiver seguro.'
+    return 'Esse relato pode exigir avaliação presencial. Procure atendimento médico imediatamente e avise sua nutricionista quando estiver seguro.'
   }
 
   const dietHint = activeDiet
-    ? `Seu plano ativo e "${activeDiet.title}", com meta de ${activeDiet.calories} kcal e ${activeDiet.waterGoalMl} ml de agua.`
-    : 'Ainda nao encontrei uma dieta ativa cadastrada.'
+    ? `Seu plano ativo é "${activeDiet.title}", com meta de ${activeDiet.calories} kcal e ${activeDiet.waterGoalMl} ml de água.`
+    : 'Ainda não encontrei uma dieta ativa cadastrada.'
 
   const workoutHint = activeWorkout
-    ? `Seu treino ativo e "${activeWorkout.title}", planejado para ${activeWorkout.frequencyPerWeek}x por semana.`
-    : 'Ainda nao encontrei um treino ativo cadastrado.'
+    ? `Seu treino ativo é "${activeWorkout.title}", planejado para ${activeWorkout.frequencyPerWeek}x por semana.`
+    : 'Ainda não encontrei um treino ativo cadastrado.'
 
-  return `${dietHint} ${workoutHint} Minha orientacao e seguir o que foi prescrito, registrar suas metricas de hoje e levar qualquer dificuldade recorrente para a nutricionista ajustar o plano.`
+  return `${dietHint} ${workoutHint} Minha orientação é seguir o que foi prescrito, registrar suas métricas de hoje e levar qualquer dificuldade recorrente para a nutricionista ajustar o plano.`
 }
 
 function formatMetric(metric: PatientMetric) {

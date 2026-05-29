@@ -42,7 +42,7 @@ export function PatientSummary({
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <Info icon={<Mail size={16} />} label="Email" value={patient.email} />
+          <Info icon={<Mail size={16} />} label="E-mail" value={patient.email} />
           <Info icon={<CalendarDays size={16} />} label="Nascimento" value={patient.birthDate} />
           <Info icon={<Target size={16} />} label="Objetivo" value={patient.objective} />
         </div>
@@ -51,13 +51,13 @@ export function PatientSummary({
       <Card className="p-5">
         <div className="flex items-center gap-2">
           <AlertTriangle className="text-amber-600" size={18} />
-          <h3 className="font-bold">Alertas clinicos</h3>
+          <h3 className="font-bold">Alertas clínicos</h3>
         </div>
         <div className="mt-4 space-y-3">
           <Alert label="Dieta ativa" ok={Boolean(diet)} />
           <Alert label="Treino ativo" ok={Boolean(workout)} />
           <Alert
-            label="Metricas recentes"
+            label="Métricas recentes"
             ok={variableMetrics.length > 0}
           />
           <Alert
@@ -68,7 +68,7 @@ export function PatientSummary({
       </Card>
 
       <Card className="p-5 xl:col-span-2">
-        <h3 className="font-bold">Metricas principais</h3>
+        <h3 className="font-bold">Métricas principais</h3>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {mainMetrics.map((metric) => (
             <div

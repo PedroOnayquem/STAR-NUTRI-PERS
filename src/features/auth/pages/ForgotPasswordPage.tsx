@@ -29,12 +29,12 @@ export function ForgotPasswordPage() {
       await recoverPassword({ email })
       setFeedback({
         type: 'success',
-        text: 'Enviamos as instrucoes de recuperacao para o email informado.',
+        text: 'Enviamos as instruções de recuperação para o e-mail informado.',
       })
     } catch (caught) {
       setFeedback({
         type: 'error',
-        text: caught instanceof Error ? caught.message : 'Nao foi possivel enviar o email.',
+        text: caught instanceof Error ? caught.message : 'Não foi possível enviar o e-mail.',
       })
     } finally {
       setLoading(false)
@@ -45,7 +45,7 @@ export function ForgotPasswordPage() {
     <Card className="w-full max-w-md p-6">
       <h2 className="text-2xl font-black">Recuperar senha</h2>
       <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-        Informe o email da conta para receber o link de recuperacao.
+        Informe o e-mail da conta para receber o link de recuperação.
       </p>
 
       <form className="mt-6 space-y-4" onSubmit={submit}>

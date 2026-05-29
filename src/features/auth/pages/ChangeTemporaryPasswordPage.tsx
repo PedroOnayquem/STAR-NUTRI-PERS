@@ -52,7 +52,7 @@ export function ChangeTemporaryPasswordPage() {
       setFeedback(
         caught instanceof Error
           ? caught.message
-          : 'Nao foi possivel atualizar a senha.',
+          : 'Não foi possível atualizar a senha.',
       )
     } finally {
       setLoading(false)
@@ -70,7 +70,7 @@ export function ChangeTemporaryPasswordPage() {
           Defina sua nova senha
         </h2>
         <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-          {user?.email ?? 'Sua conta'} foi criada com uma senha provisoria. Antes
+          {user?.email ?? 'Sua conta'} foi criada com uma senha provisória. Antes
           de continuar, escolha uma senha definitiva e mais segura.
         </p>
       </div>
@@ -104,7 +104,7 @@ export function ChangeTemporaryPasswordPage() {
 
         <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 dark:border-white/10 dark:bg-white/[0.04]">
           <p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            Requisitos de seguranca
+            Requisitos de segurança
           </p>
           <div className="mt-3 space-y-2">
             {checks.map((check) => (

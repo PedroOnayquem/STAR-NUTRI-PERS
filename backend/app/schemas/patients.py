@@ -11,6 +11,7 @@ class CreatePatientRequest(BaseModel):
     gender: str | None = Field(default=None, max_length=40)
     objective: str | None = Field(default=None, max_length=240)
     notes: str | None = Field(default=None, max_length=1000)
+    import_id: str | None = None
 
 
 class CreatePatientResponse(BaseModel):

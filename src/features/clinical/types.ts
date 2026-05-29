@@ -66,6 +66,8 @@ export type MetricRecord = {
   unit: string | null
   defined_by?: string | null
   recorded_at?: string | null
+  source_type?: string | null
+  source_import_id?: string | null
   created_at?: string | null
 }
 
@@ -138,6 +140,93 @@ export type ChatMessageRecord = {
   created_at: string
 }
 
+export type AppointmentType =
+  | 'acompanhamento'
+  | 'consulta'
+  | 'reuniao'
+  | 'avaliacao'
+  | 'retorno'
+  | 'revisao_dieta'
+  | 'revisao_treino'
+  | 'outro'
+
+export type AppointmentStatus =
+  | 'agendado'
+  | 'confirmado'
+  | 'concluido'
+  | 'cancelado'
+  | 'faltou'
+
+export type PatientAppointmentRecord = {
+  id: string
+  patient_id: string
+  patient_user_id: string
+  nutritionist_id: string
+  title: string
+  type: AppointmentType
+  description: string | null
+  date: string
+  start_time: string
+  end_time: string | null
+  location: string | null
+  meeting_link: string | null
+  status: AppointmentStatus
+  notes: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export type NotificationType =
+  | 'appointment_created'
+  | 'appointment_updated'
+  | 'appointment_cancelled'
+  | 'appointment_reminder'
+
+export type NotificationRecord = {
+  id: string
+  user_id: string
+  patient_id: string | null
+  appointment_id: string | null
+  title: string
+  message: string
+  type: NotificationType
+  read: boolean
+  created_at: string
+}
+
+export type PatientImportRecord = {
+  id: string
+  patient_id: string | null
+  nutritionist_id: string
+  file_url: string | null
+  file_path?: string | null
+  source_type: 'bioimpedance_report' | 'bioimpedance_pdf' | string
+  file_type: 'pdf' | 'jpg' | 'jpeg' | 'png' | null
+  mime_type?: string | null
+  original_file_name?: string | null
+  file_size_bytes?: number | null
+  error_message?: string | null
+  files?: PatientImportFileRecord[]
+  extracted_payload: Record<string, unknown>
+  confidence_payload: Record<string, unknown>
+  status: 'processed' | 'linked' | 'failed'
+  created_at: string
+  updated_at?: string | null
+}
+
+export type PatientImportFileRecord = {
+  id: string
+  import_id: string
+  file_url: string | null
+  file_type: 'pdf' | 'jpg' | 'jpeg' | 'png' | null
+  mime_type: string | null
+  original_file_name: string | null
+  file_size_bytes: number | null
+  extracted_text?: string | null
+  order_index: number | null
+  created_at: string
+}
+
 export type PatientContext = {
   patient: PatientRecord
   profile: ProfileSummary | null
@@ -149,6 +238,8 @@ export type PatientContext = {
   workouts: WorkoutRecord[]
   nutritionist_chats: ChatSessionRecord[]
   patient_chats: ChatSessionRecord[]
+  appointments: PatientAppointmentRecord[]
+  imports: PatientImportRecord[]
   recent_professional_messages: ChatMessageRecord[]
   recent_personal_messages: ChatMessageRecord[]
 }
@@ -156,6 +247,40 @@ export type PatientContext = {
 export type NutritionistWorkspace = {
   nutritionist: NutritionistRecord
   patients: PatientRecord[]
+}
+
+export type DashboardAlert = {
+  id: string
+  type: 'evolution' | 'diet' | 'condition' | 'appointment'
+  tone: 'green' | 'blue' | 'amber' | 'red' | 'slate'
+  title: string
+  description: string
+  patient_id: string
+  patient_name: string
+  date: string | null
+}
+
+export type DashboardPatientSummary = {
+  id: string
+  name: string
+  objective: string | null
+  status: 'Ativo' | 'Inativo'
+  is_active: boolean
+  last_update_at: string | null
+  next_appointment_at: string | null
+  alert: string | null
+}
+
+export type NutritionistDashboard = {
+  nutritionist: NutritionistRecord
+  stats: {
+    active_patients: number
+    appointments_today: number
+    active_diets: number
+    important_alerts: number
+  }
+  recent_patients: DashboardPatientSummary[]
+  alerts: DashboardAlert[]
 }
 
 export type AdminWorkspace = {

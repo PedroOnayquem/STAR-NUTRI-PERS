@@ -40,7 +40,7 @@ class SupabaseAdminService:
         except httpx.RequestError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel conectar ao Supabase Auth.",
+                detail="Não foi possível validar o acesso. Tente novamente em instantes.",
             ) from None
 
         if response.status_code >= 400:
@@ -58,7 +58,7 @@ class SupabaseAdminService:
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authenticated user not found.",
+                detail="Usuário não encontrado.",
             )
 
         try:
@@ -165,7 +165,7 @@ class SupabaseAdminService:
         except httpx.RequestError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Nao foi possivel concluir a criacao no Supabase.",
+                detail="Não foi possível concluir o cadastro. Tente novamente em instantes.",
             ) from None
 
         nutritionist = nutritionist_response.json()[0]
@@ -196,7 +196,7 @@ class SupabaseAdminService:
             or "duplicate" in normalized
         ):
             status_code = status.HTTP_409_CONFLICT
-            detail = "Este email ja esta cadastrado no Supabase Auth. Use outro email."
+            detail = "Este e-mail já está cadastrado. Use outro e-mail."
 
         raise HTTPException(status_code=status_code, detail=detail)
 

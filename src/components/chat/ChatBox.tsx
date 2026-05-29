@@ -92,7 +92,7 @@ export function ChatBox({
               <Bot size={20} />
             </div>
             <div>
-              <h3 className="font-bold">Chat IA ChatGPT</h3>
+              <h3 className="font-bold">Chat com IA</h3>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 Respostas limitadas ao plano cadastrado
               </p>
@@ -132,7 +132,7 @@ export function ChatBox({
                   sendMessage()
                 }
               }}
-              placeholder="Ex.: Posso trocar o pre-treino por outra opcao?"
+              placeholder="Ex.: Posso trocar o pré-treino por outra opção?"
               value={content}
             />
             <Button className="sm:self-end" onClick={sendMessage} type="button">
@@ -146,16 +146,16 @@ export function ChatBox({
       <Card className="p-5">
         <div className="flex items-center gap-2">
           <Sparkles className="text-emerald-600" size={18} />
-          <h3 className="font-bold">Contexto enviado para IA</h3>
+          <h3 className="font-bold">Informações consideradas pela IA</h3>
         </div>
         <div className="mt-4 space-y-4 text-sm">
-          <ContextItem label="Modelo" value={aiContext.model} />
+          <ContextItem label="Assistente" value={aiContext.model} />
           <ContextItem label="Paciente" value={aiContext.patient.name} />
           <ContextItem label="Objetivo" value={aiContext.patient.objective} />
           <ContextItem label="Dieta" value={aiContext.diet} />
           <ContextItem label="Treino" value={aiContext.workout} />
-          <ContextList label="Metricas" values={aiContext.mainMetrics} />
-          <ContextList label="Condicoes" values={aiContext.conditions} />
+          <ContextList label="Métricas" values={aiContext.mainMetrics} />
+          <ContextList label="Condições" values={aiContext.conditions} />
         </div>
       </Card>
     </div>
@@ -187,7 +187,7 @@ function ContextList({ label, values }: { label: string; values: string[] }) {
             </p>
           ))
         ) : (
-          <p className="text-slate-500 dark:text-slate-400">Nao informado</p>
+          <p className="text-slate-500 dark:text-slate-400">Não informado</p>
         )}
       </div>
     </div>

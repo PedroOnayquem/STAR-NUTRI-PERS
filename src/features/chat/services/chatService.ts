@@ -1,4 +1,5 @@
 import type { Session } from '@supabase/supabase-js'
+import { USER_MESSAGES, sanitizeUserMessage } from '../../../constants/messages'
 import { apiRequest, authHeaders, requireApiBaseUrl } from '../../../lib/api'
 import type { ChatMessageRecord, ChatSessionRecord } from '../../clinical/types'
 import type { AiReasoningLevel, ChatScope } from '../types'
@@ -82,14 +83,12 @@ export async function sendChatMessageStream({
       session_id: sessionId,
     }),
   }).catch(() => {
-    throw new Error(
-      `Nao foi possivel conectar ao backend em ${requireApiBaseUrl()}. Rode npm run dev:api.`,
-    )
+    throw new Error(USER_MESSAGES.connectionError)
   })
 
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.detail ?? 'Nao foi possivel conversar com a IA.')
+    throw new Error(sanitizeUserMessage(body?.detail, 'Não foi possível conversar com a IA.'))
   }
 
   const reader = response.body.getReader()
@@ -128,7 +127,7 @@ export async function sendChatMessageStream({
         onAction?.(payload)
       }
       if (event === 'error') {
-        const message = payload.detail ?? 'Erro ao chamar a IA.'
+        const message = sanitizeUserMessage(payload.detail, 'Não foi possível conversar com a IA.')
         onError?.(message)
         throw new Error(message)
       }

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { supabase } from '../../lib/supabase'
+import { USER_MESSAGES, friendlyErrorMessage } from '../../constants/messages'
 import {
   getInitialSession,
   needsPasswordChange,
@@ -92,7 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(nextSession)
         await loadProfile(nextSession)
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : 'Erro ao carregar sessao.')
+        setError(friendlyErrorMessage(caught, USER_MESSAGES.missingSession))
       } finally {
         if (mounted) {
           setLoading(false)
@@ -113,7 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession)
       loadProfile(nextSession).catch((caught) => {
-        setError(caught instanceof Error ? caught.message : 'Erro ao buscar perfil.')
+        setError(friendlyErrorMessage(caught, USER_MESSAGES.actionError))
       })
     })
 
@@ -132,7 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!nextProfile) {
       await signOut()
       setSession(null)
-      throw new Error('Usuario sem perfil ativo cadastrado.')
+      throw new Error('Seu perfil ainda não está ativo. Fale com o responsável pela sua conta.')
     }
 
     return {

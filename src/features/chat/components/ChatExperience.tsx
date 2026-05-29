@@ -69,7 +69,7 @@ const GENERAL_CHAT_OPTION: PatientOption = {
   id: null,
   isGeneral: true,
   name: 'Chat geral',
-  objective: 'Sem paciente especifico',
+  objective: 'Sem paciente específico',
 }
 
 export function ChatExperience({
@@ -130,14 +130,18 @@ export function ChatExperience({
     () =>
       isProfessional
         ? [GENERAL_CHAT_OPTION, ...patientOptions]
-        : patientOptions,
+        : [],
     [isProfessional, patientOptions],
   )
-  const selectedPatient =
-    patientMenuOptions.find((patient) => patient.id === patientId) ??
-    (isProfessional ? GENERAL_CHAT_OPTION : patientOptions[0])
-  const selectedPatientName = selectedPatient?.name ?? patientName ?? 'Paciente'
-  const focusedPatientId = selectedPatient?.id ?? patientId ?? null
+  const selectedPatient = isProfessional
+    ? patientMenuOptions.find((patient) => patient.id === patientId) ?? GENERAL_CHAT_OPTION
+    : null
+  const selectedPatientName = isProfessional
+    ? selectedPatient?.name ?? patientName ?? 'Paciente'
+    : patientName ?? 'Paciente'
+  const focusedPatientId = isProfessional
+    ? selectedPatient?.id ?? patientId ?? null
+    : null
   const isGeneralProfessionalChat = isProfessional && !patientId
   const hasRequiredFocus = !isProfessional || Boolean(selectedPatient)
   const currentSession = chat.sessions.find(
@@ -154,14 +158,16 @@ export function ChatExperience({
   const patientLabelBySessionId = useMemo(
     () =>
       Object.fromEntries(
-        chat.sessions.map((session) => [
-          session.id,
-          session.patient_id
-            ? patientNameById[session.patient_id] ?? 'Paciente'
-            : GENERAL_CHAT_OPTION.name,
-        ]),
+        chat.sessions.map((session) => {
+          const label = !isProfessional
+            ? 'Chat pessoal'
+            : session.patient_id
+              ? patientNameById[session.patient_id] ?? 'Paciente'
+              : GENERAL_CHAT_OPTION.name
+          return [session.id, label]
+        }),
       ),
-    [chat.sessions, patientNameById],
+    [chat.sessions, isProfessional, patientNameById],
   )
   const filteredSessions = useMemo(() => {
     const term = deferredConversationSearch.trim().toLowerCase()
@@ -170,12 +176,13 @@ export function ChatExperience({
     return chat.sessions.filter((session) => {
       const title = session.title?.toLowerCase() ?? ''
       const patient = (
-        patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name
+        patientLabelBySessionId[session.id] ??
+        (isProfessional ? GENERAL_CHAT_OPTION.name : 'Chat pessoal')
       ).toLowerCase()
       const date = formatSessionDate(session).toLowerCase()
       return title.includes(term) || patient.includes(term) || date.includes(term)
     })
-  }, [chat.sessions, deferredConversationSearch, patientLabelBySessionId])
+  }, [chat.sessions, deferredConversationSearch, isProfessional, patientLabelBySessionId])
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -251,7 +258,7 @@ export function ChatExperience({
             <div className="mx-auto flex min-h-full max-w-3xl flex-col">
               {!hasRequiredFocus ? (
                 <ChatEmpty
-                  description="Escolha um paciente no topo para carregar contexto e historico."
+                  description="Escolha um paciente no topo para carregar contexto e histórico."
                   title="Selecione um paciente"
                 />
               ) : chat.isLoading && !chat.messages.length ? (
@@ -261,9 +268,9 @@ export function ChatExperience({
                   description={
                     isProfessional
                       ? isGeneralProfessionalChat
-                        ? 'Converse sobre condutas gerais, materiais educativos e organizacao do consultorio sem depender de um paciente especifico.'
-                        : 'Pergunte sobre evolucao, aderencia ou pontos de atencao.'
-                      : 'Pergunte sobre sua dieta ativa, treino, rotina, compras ou organizacao do dia.'
+                        ? 'Converse sobre condutas gerais, materiais educativos e organização do consultório sem depender de um paciente específico.'
+                        : 'Pergunte sobre evolução, aderência ou pontos de atenção.'
+                      : 'Pergunte sobre sua dieta ativa, treino, rotina, compras ou organização do dia.'
                   }
                   title={
                     isProfessional
@@ -319,8 +326,8 @@ export function ChatExperience({
               hasRequiredFocus
                 ? isProfessional
                   ? isGeneralProfessionalChat
-                    ? 'Mensagem profissional geral para o Star Nutri...'
-                    : 'Mensagem para o Star Nutri...'
+                    ? 'Digite sua mensagem profissional...'
+                    : 'Digite sua mensagem...'
                   : 'Pergunte sobre sua rotina...'
                 : 'Selecione um paciente para conversar'
             }
@@ -372,7 +379,7 @@ function ChatSidebar({
           ) : (
             <MessageSquarePlus size={17} />
           )}
-          Novo Chat
+          Novo chat
         </Button>
 
         <label className="flex h-10 items-center gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/35 px-3 text-slate-400 shadow-inner shadow-cyan-950/10 transition focus-within:border-cyan-300/35 focus-within:bg-slate-950/55 focus-within:text-cyan-100 focus-within:ring-2 focus-within:ring-cyan-400/10">
@@ -457,23 +464,25 @@ function ChatTopbar({
         </div>
       </div>
 
-      <div className="flex w-full min-w-0 flex-nowrap justify-end gap-2 pb-1 sm:w-auto sm:flex-1 sm:pb-0">
-        {patients.length > 0 ? (
-          <PatientFocusMenu
-            onChange={(nextPatientId) => {
-              onPatientChange?.(nextPatientId)
-              setPatientMenuOpen(false)
-            }}
-            onOpenChange={setPatientMenuOpen}
-            open={patientMenuOpen}
-            patientId={patientId}
-            patients={patients}
-            scope={scope}
-          />
-        ) : (
-          <StaticPatientPill patientName={patientName} />
-        )}
-      </div>
+      {scope === 'nutritionist' && (
+        <div className="flex w-full min-w-0 flex-nowrap justify-end gap-2 pb-1 sm:w-auto sm:flex-1 sm:pb-0">
+          {patients.length > 0 ? (
+            <PatientFocusMenu
+              onChange={(nextPatientId) => {
+                onPatientChange?.(nextPatientId)
+                setPatientMenuOpen(false)
+              }}
+              onOpenChange={setPatientMenuOpen}
+              open={patientMenuOpen}
+              patientId={patientId}
+              patients={patients}
+              scope={scope}
+            />
+          ) : (
+            <StaticPatientPill patientName={patientName} />
+          )}
+        </div>
+      )}
     </header>
   )
 }
@@ -821,15 +830,15 @@ function ReasoningMenu({
     <div className="relative shrink-0">
       <button
         aria-expanded={open}
-        aria-label="Nivel de pensamento da IA"
+        aria-label="Nível de raciocínio da IA"
         className="group inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-slate-400 transition hover:bg-cyan-300/[0.09] hover:text-cyan-100 hover:shadow-[0_0_22px_rgba(56,189,248,0.12)]"
         onClick={() => setOpen(!open)}
         type="button"
-        title="Pensamento"
+        title="Raciocínio"
       >
         <BrainCircuit size={17} />
         <span className="hidden min-w-0 truncate sm:block">
-          {selected?.shortLabel ?? 'Medio'}
+          {selected?.shortLabel ?? 'Médio'}
         </span>
         <ChevronDown
           className={cn(
@@ -1030,7 +1039,7 @@ function AgentActionList({ actions }: { actions: AgentAction[] }) {
           >
             <Icon className="mt-0.5 shrink-0" size={15} />
             <div className="min-w-0">
-              <p className="font-black">{action.label ?? action.tool ?? 'Acao do agente'}</p>
+              <p className="font-black">{action.label ?? 'Ação realizada'}</p>
               {(action.summary || action.error) && (
                 <p className="mt-0.5 text-[11px] leading-5 opacity-80">
                   {action.summary || action.error}

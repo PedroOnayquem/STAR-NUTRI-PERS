@@ -34,12 +34,12 @@ const navByRole: Record<UserRole, Array<{ id: string; label: string; icon: React
     { id: 'patients', label: 'Pacientes', icon: <Users size={18} /> },
     { id: 'diet', label: 'Dietas', icon: <Utensils size={18} /> },
     { id: 'workout', label: 'Treinos', icon: <Dumbbell size={18} /> },
-    { id: 'metrics', label: 'Metricas', icon: <Activity size={18} /> },
+    { id: 'metrics', label: 'Métricas', icon: <Activity size={18} /> },
     { id: 'chat', label: 'IA', icon: <Bot size={18} /> },
   ],
   patient: [
     { id: 'patient-home', label: 'Meu plano', icon: <LayoutDashboard size={18} /> },
-    { id: 'patient-metrics', label: 'Metricas', icon: <Activity size={18} /> },
+    { id: 'patient-metrics', label: 'Métricas', icon: <Activity size={18} /> },
     { id: 'patient-chat', label: 'Chat IA', icon: <Bot size={18} /> },
   ],
 }
@@ -150,7 +150,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
             Star Nutri
           </p>
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Nutricao com IA
+            Nutrição com IA
           </p>
         </div>
       )}

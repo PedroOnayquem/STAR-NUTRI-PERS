@@ -21,11 +21,11 @@ import { getAdminWorkspace } from '../features/clinical/services/workspaceServic
 
 const nutritionistSchema = z.object({
   fullName: z.string().min(3, 'Informe o nome completo.'),
-  email: z.string().email('Informe um email valido.'),
+  email: z.string().email('Informe um e-mail válido.'),
   password: z.string().min(6, 'A senha deve ter pelo menos 6 caracteres.'),
   crn: z.string(),
   specialty: z.string(),
-  bio: z.string().max(500, 'Maximo de 500 caracteres.'),
+  bio: z.string().max(500, 'Máximo de 500 caracteres.'),
 })
 
 export function AdminPage() {
@@ -66,13 +66,13 @@ export function AdminPage() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        description="Controle operacional do SaaS: usuarios, nutricionistas, pacientes, uso e seguranca."
-        eyebrow={<Badge tone="blue">Admin workspace</Badge>}
+        description="Acompanhe nutricionistas, pacientes, acessos e indicadores da operação."
+        eyebrow={<Badge tone="blue">Administração</Badge>}
         title="Painel administrativo"
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard caption="perfis cadastrados" icon={<Users size={20} />} label="Usuarios" value={workspace?.stats.users ?? 0} />
+        <StatCard caption="perfis cadastrados" icon={<Users size={20} />} label="Usuários" value={workspace?.stats.users ?? 0} />
         <StatCard caption="profissionais ativos" icon={<ShieldCheck size={20} />} label="Nutricionistas" value={workspace?.stats.nutritionists ?? 0} />
         <StatCard caption="pacientes totais" icon={<Activity size={20} />} label="Pacientes" value={workspace?.stats.patients ?? 0} />
         <StatCard caption="mensagens salvas" icon={<BarChart3 size={20} />} label="Chat IA" value={workspace?.stats.chat_messages ?? 0} />
@@ -80,9 +80,9 @@ export function AdminPage() {
 
       <div className="flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 dark:border-white/10 dark:bg-white/[0.04]">
         {[
-          ['overview', 'Visao geral'],
+          ['overview', 'Visão geral'],
           ['nutritionists', 'Nutricionistas'],
-          ['users', 'Usuarios'],
+          ['users', 'Usuários'],
         ].map(([id, label]) => (
           <button
             className={`rounded-xl px-3 py-2 text-sm font-bold transition ${
@@ -102,7 +102,7 @@ export function AdminPage() {
       {tab === 'overview' && (
         <div className="grid gap-4 xl:grid-cols-3">
           <Card className="p-5">
-            <h2 className="font-black">Analytics</h2>
+            <h2 className="font-black">Indicadores</h2>
             <div className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
               <p>Dietas cadastradas: <strong>{workspace?.stats.diets ?? 0}</strong></p>
               <p>Treinos cadastrados: <strong>{workspace?.stats.workouts ?? 0}</strong></p>
@@ -112,13 +112,13 @@ export function AdminPage() {
           <Card className="p-5">
             <h2 className="font-black">Assinaturas</h2>
             <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
-              Estrutura preparada para integrar billing e planos. Hoje os dados estao centralizados no workspace admin.
+              Gestão de planos e assinaturas disponível para acompanhamento administrativo.
             </p>
           </Card>
           <Card className="p-5">
             <h2 className="font-black">Logs e acesso</h2>
             <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
-              O banco possui tabela de logs. As proximas automacoes podem registrar eventos de CRUD e chat.
+              Acompanhe acessos e eventos importantes da operação em um só lugar.
             </p>
           </Card>
         </div>
@@ -134,7 +134,7 @@ export function AdminPage() {
               <div>
                 <h2 className="font-black">Cadastrar nutricionista</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Apenas admins criam profissionais.
+                  Cadastre profissionais autorizados a acompanhar pacientes.
                 </p>
               </div>
             </div>
@@ -145,9 +145,9 @@ export function AdminPage() {
             >
               <Input placeholder="Nome completo" {...form.register('fullName')} />
               {form.formState.errors.fullName && <ErrorText>{form.formState.errors.fullName.message}</ErrorText>}
-              <Input placeholder="Email" type="email" {...form.register('email')} />
+              <Input placeholder="E-mail" type="email" {...form.register('email')} />
               {form.formState.errors.email && <ErrorText>{form.formState.errors.email.message}</ErrorText>}
-              <Input placeholder="Senha provisoria" type="password" {...form.register('password')} />
+              <Input placeholder="Senha provisória" type="password" {...form.register('password')} />
               {form.formState.errors.password && <ErrorText>{form.formState.errors.password.message}</ErrorText>}
               <Input placeholder="CRN" {...form.register('crn')} />
               <Input placeholder="Especialidade" {...form.register('specialty')} />
@@ -170,7 +170,7 @@ export function AdminPage() {
             </div>
             {workspace?.nutritionists.length === 0 ? (
               <div className="p-5">
-                <EmptyState description="Crie o primeiro nutricionista para liberar a operacao clinica." title="Nenhum nutricionista" />
+                <EmptyState description="Cadastre o primeiro nutricionista para iniciar os acompanhamentos." title="Nenhum nutricionista cadastrado" />
               </div>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-white/10">
@@ -180,7 +180,7 @@ export function AdminPage() {
                     <div className="p-5" key={nutritionist.id}>
                       <p className="font-bold">{profile?.full_name ?? 'Nutricionista'}</p>
                       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{profile?.email}</p>
-                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{nutritionist.specialty || 'Especialidade nao informada'}</p>
+                      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{nutritionist.specialty || 'Especialidade não informada'}</p>
                     </div>
                   )
                 })}
@@ -193,7 +193,7 @@ export function AdminPage() {
       {tab === 'users' && (
         <Card className="overflow-hidden p-0">
           <div className="border-b border-slate-200 p-5 dark:border-white/10">
-            <h2 className="font-black">Usuarios e controle de acesso</h2>
+            <h2 className="font-black">Usuários e permissões</h2>
           </div>
           <div className="divide-y divide-slate-100 dark:divide-white/10">
             {workspace?.profiles.map((profile) => (

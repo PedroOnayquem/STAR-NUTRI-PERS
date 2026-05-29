@@ -1,11 +1,12 @@
 import type { Session } from '@supabase/supabase-js'
+import { USER_MESSAGES, sanitizeUserMessage } from '../constants/messages'
 import { getAppConfig } from './runtimeConfig'
 
 export function requireApiBaseUrl() {
   const apiBaseUrl = getAppConfig('VITE_API_BASE_URL')
 
   if (!apiBaseUrl) {
-    throw new Error('VITE_API_BASE_URL nao configurado.')
+    throw new Error(USER_MESSAGES.unavailableConfig)
   }
 
   return apiBaseUrl.replace(/\/$/, '')
@@ -13,7 +14,7 @@ export function requireApiBaseUrl() {
 
 export function authHeaders(session: Session | null) {
   if (!session?.access_token) {
-    throw new Error('Sessao autenticada nao encontrada.')
+    throw new Error(USER_MESSAGES.missingSession)
   }
 
   return {
@@ -36,9 +37,7 @@ export async function apiRequest<T>(
       ...init?.headers,
     },
   }).catch(() => {
-    throw new Error(
-      `Nao foi possivel conectar ao backend em ${requireApiBaseUrl()}. Verifique se a API do Star Nutri esta no ar.`,
-    )
+    throw new Error(USER_MESSAGES.connectionError)
   })
   const elapsed = performance.now() - startedAt
   if (import.meta.env.DEV && elapsed > 450) {
@@ -56,7 +55,7 @@ export async function apiRequest<T>(
           .join(' | ')
       : body?.detail
 
-    throw new Error(detail ?? 'A requisicao nao pode ser concluida.')
+    throw new Error(sanitizeUserMessage(detail, USER_MESSAGES.actionError))
   }
 
   return body as T

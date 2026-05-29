@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
+import { friendlyErrorMessage, USER_MESSAGES } from '../constants/messages'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
 
@@ -29,9 +30,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-300">
             <AlertTriangle size={22} />
           </div>
-          <h1 className="mt-4 text-xl font-black">Algo saiu do trilho</h1>
+          <h1 className="mt-4 text-xl font-black">Não foi possível carregar esta área</h1>
           <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-            {this.state.error.message || 'Nao foi possivel renderizar esta area.'}
+            {friendlyErrorMessage(this.state.error, USER_MESSAGES.actionError)}
           </p>
           <Button className="mt-5" onClick={() => window.location.reload()} variant="premium">
             Recarregar

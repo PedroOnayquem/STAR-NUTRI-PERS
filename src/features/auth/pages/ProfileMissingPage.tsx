@@ -13,11 +13,10 @@ export function ProfileMissingPage() {
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
           <AlertTriangle size={24} />
         </div>
-        <h1 className="mt-4 text-2xl font-black">Perfil nao encontrado</h1>
+        <h1 className="mt-4 text-2xl font-black">Perfil não encontrado</h1>
         <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          A autenticacao existe, mas nao encontramos um perfil ativo na tabela
-          `profiles` para {user?.email ?? 'este usuario'}. Um admin precisa
-          criar ou ativar esse perfil antes do acesso.
+          Não encontramos um perfil ativo para {user?.email ?? 'este usuário'}.
+          Solicite ao responsável pela sua conta a ativação do acesso.
         </p>
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
           <Button onClick={logout} type="button">

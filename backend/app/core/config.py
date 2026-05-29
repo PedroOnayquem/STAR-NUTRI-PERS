@@ -42,6 +42,7 @@ class Settings:
             "https://api.openai.com/v1/chat/completions",
         )
         self.openai_model: str = getenv("OPENAI_MODEL", "chat-latest")
+        self.openai_ocr_model: str = getenv("OPENAI_OCR_MODEL", self.openai_model)
 
 
 @lru_cache

@@ -16,6 +16,7 @@ AUTO_TOOLS = {
     "add_observation",
     "add_workout_observation",
     "create_appointment",
+    "create_patient_appointment",
     "create_training_plan",
     "register_injury",
     "register_progress",
@@ -389,6 +390,18 @@ class AiAgentService:
                     context=context,
                     intent=intent,
                     message=message,
+                    tool_name=tool_name,
+                )
+            if tool_name == "create_patient_appointment":
+                return await self._create_appointment(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                    tool_name=tool_name,
                 )
             if tool_name == "create_training_plan":
                 return await self._create_training_plan(
@@ -735,6 +748,7 @@ class AiAgentService:
         context: dict,
         intent: str,
         message: dict,
+        tool_name: str = "create_appointment",
     ) -> dict:
         if chat_scope != "nutritionist":
             return await self._record_action(
@@ -878,12 +892,20 @@ class AiAgentService:
                 error="Apenas nutricionistas podem criar consultas.",
                 message=message,
                 status="skipped",
-                tool_name="create_appointment",
+                tool_name=tool_name,
             )
 
         nutritionist = context.get("nutritionist") or {}
         scheduled_at = str(arguments.get("scheduled_at_iso") or "").strip()
-        if not nutritionist.get("id") or not scheduled_at:
+        date = str(arguments.get("date") or "").strip()
+        start_time = str(arguments.get("start_time") or "").strip()
+        if scheduled_at and (not date or not start_time):
+            parsed = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
+            local = parsed.astimezone(ZoneInfo("America/Sao_Paulo"))
+            date = local.date().isoformat()
+            start_time = local.time().replace(microsecond=0).isoformat()
+
+        if not nutritionist.get("id") or not date or not start_time:
             return await self._record_action(
                 actor=actor,
                 arguments=arguments,
@@ -893,14 +915,14 @@ class AiAgentService:
                 error="Consulta sem nutricionista ou horario valido.",
                 message=message,
                 status="skipped",
-                tool_name="create_appointment",
+                tool_name=tool_name,
             )
 
-        datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
         duplicate = await self.workspace.find_appointment(
             nutritionist_id=nutritionist["id"],
             patient_id=self._patient_id(context),
-            scheduled_at=scheduled_at,
+            date=date,
+            start_time=start_time,
         )
         if duplicate:
             return await self._record_action(
@@ -916,15 +938,20 @@ class AiAgentService:
                     "summary": duplicate.get("title"),
                 },
                 status="skipped",
-                tool_name="create_appointment",
+                tool_name=tool_name,
             )
 
-        created = await self.workspace.create_appointment_record(
+        created = await self.workspace.create_patient_appointment(
             nutritionist_id=nutritionist["id"],
             patient_id=self._patient_id(context),
             title=str(arguments.get("title") or "Retorno nutricional")[:160],
-            scheduled_at=scheduled_at,
-            created_by=actor["id"],
+            type=str(arguments.get("type") or "consulta"),
+            description=_optional_text(arguments.get("description")),
+            date=date,
+            start_time=start_time,
+            end_time=_optional_text(arguments.get("end_time")),
+            location=_optional_text(arguments.get("location")),
+            meeting_link=_optional_text(arguments.get("meeting_link")),
             notes=_optional_text(arguments.get("notes")),
         )
         return await self._record_action(
@@ -937,10 +964,13 @@ class AiAgentService:
             message=message,
             result={
                 "label": "Consulta marcada",
-                "summary": f"{created.get('title')} em {created.get('scheduled_at')}",
+                "summary": (
+                    f"{created.get('title')} em {created.get('date')} "
+                    f"as {created.get('start_time')}"
+                ),
             },
             status="executed",
-            tool_name="create_appointment",
+            tool_name=tool_name,
         )
 
     async def _create_training_plan(
@@ -2084,9 +2114,39 @@ AGENT_TOOLS = [
                     "title": {"type": "string"},
                     "patient_name": {"type": "string"},
                     "scheduled_at_iso": {"type": "string"},
+                    "type": {"type": "string"},
+                    "description": {"type": "string"},
+                    "date": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "location": {"type": "string"},
+                    "meeting_link": {"type": "string"},
                     "notes": {"type": "string"},
                 },
                 "required": ["scheduled_at_iso"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_patient_appointment",
+            "description": "Cria um compromisso real na agenda do paciente para o nutricionista.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {"type": "string"},
+                    "nutritionist_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "type": {"type": "string"},
+                    "date": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "location": {"type": "string"},
+                    "meeting_link": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["title", "type", "date", "start_time"],
             },
         },
     },

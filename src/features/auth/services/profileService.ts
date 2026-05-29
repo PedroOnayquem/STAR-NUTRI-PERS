@@ -1,3 +1,4 @@
+import { USER_MESSAGES, sanitizeUserMessage } from '../../../constants/messages'
 import { supabase } from '../../../lib/supabase'
 import type { AuthProfile } from '../types'
 
@@ -13,7 +14,7 @@ type ProfileRow = {
 
 export async function getCurrentProfile(userId: string): Promise<AuthProfile | null> {
   if (!supabase) {
-    throw new Error('Supabase nao configurado. Confira o arquivo .env.')
+    throw new Error(USER_MESSAGES.unavailableConfig)
   }
 
   const { data, error } = await supabase
@@ -23,7 +24,7 @@ export async function getCurrentProfile(userId: string): Promise<AuthProfile | n
     .maybeSingle<ProfileRow>()
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(sanitizeUserMessage(error.message, USER_MESSAGES.actionError))
   }
 
   if (!data || data.is_active === false) {

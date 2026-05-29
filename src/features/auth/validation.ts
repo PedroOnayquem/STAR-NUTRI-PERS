@@ -10,15 +10,15 @@ export const STRONG_PASSWORD_RULES = [
     test: (password: string) => password.length >= 8,
   },
   {
-    label: 'Uma letra maiuscula',
+    label: 'Uma letra maiúscula',
     test: (password: string) => /[A-Z]/.test(password),
   },
   {
-    label: 'Uma letra minuscula',
+    label: 'Uma letra minúscula',
     test: (password: string) => /[a-z]/.test(password),
   },
   {
-    label: 'Um numero',
+    label: 'Um número',
     test: (password: string) => /\d/.test(password),
   },
   {
@@ -29,7 +29,7 @@ export const STRONG_PASSWORD_RULES = [
 
 export function validateEmail(email: string) {
   if (!email.trim()) {
-    return 'Informe o email.'
+    return 'Informe o e-mail.'
   }
 
   if (email.trim().toLowerCase() === 'admin') {
@@ -37,7 +37,7 @@ export function validateEmail(email: string) {
   }
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return 'Informe um email valido.'
+    return 'Informe um e-mail válido.'
   }
 
   return null
@@ -61,7 +61,7 @@ export function validateStrongPassword(password: string) {
   }
 
   if (password.includes(' ')) {
-    return 'A senha nao pode conter espacos.'
+    return 'A senha não pode conter espaços.'
   }
 
   const failedRule = STRONG_PASSWORD_RULES.find((rule) => !rule.test(password))
@@ -109,7 +109,7 @@ export function validateRegisterPatient(input: RegisterPatientInput) {
     errors.password = passwordError
   }
   if (input.password !== input.confirmPassword) {
-    errors.confirmPassword = 'As senhas nao conferem.'
+    errors.confirmPassword = 'As senhas não conferem.'
   }
 
   return errors
@@ -126,7 +126,7 @@ export function validateChangePassword(input: ChangePasswordInput) {
   if (!input.confirmPassword) {
     errors.confirmPassword = 'Confirme a nova senha.'
   } else if (input.password !== input.confirmPassword) {
-    errors.confirmPassword = 'As senhas nao conferem.'
+    errors.confirmPassword = 'As senhas não conferem.'
   }
 
   return errors

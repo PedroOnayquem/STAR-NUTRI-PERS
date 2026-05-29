@@ -114,8 +114,8 @@ function App() {
                 <Route element={<PatientWorkspacePage />} path="/patient" />
                 <Route element={<PatientWorkspacePage view="diet" />} path="/patient/diet" />
                 <Route element={<PatientWorkspacePage view="workout" />} path="/patient/workout" />
+                <Route element={<PatientWorkspacePage view="agenda" />} path="/patient/agenda" />
                 <Route element={<PatientWorkspacePage view="metrics" />} path="/patient/metrics" />
-                <Route element={<PatientWorkspacePage view="evolution" />} path="/patient/evolution" />
                 <Route element={<PatientWorkspacePage view="chat" />} path="/patient/chat" />
                 <Route element={<PatientWorkspacePage view="profile" />} path="/patient/profile" />
               </Route>

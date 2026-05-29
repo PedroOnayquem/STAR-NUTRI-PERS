@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import HTTPException, status
@@ -180,6 +181,144 @@ class SupabaseWorkspaceService:
             "patients": await self._attach_profiles(patients),
         }
 
+    async def get_nutritionist_dashboard(self, token: str) -> dict:
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas podem acessar este dashboard.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        raw_patients = await self._request(
+            "GET",
+            "/rest/v1/patients",
+            params={
+                "nutritionist_id": f"eq.{nutritionist['id']}",
+                "select": (
+                    "id,user_id,nutritionist_id,birth_date,gender,objective,notes,"
+                    "is_active,created_at,updated_at"
+                ),
+                "order": "updated_at.desc.nullslast,created_at.desc",
+            },
+        )
+        patients = self._dedupe_patients(await self._attach_profiles(raw_patients))
+        active_patients = [
+            patient for patient in patients if patient.get("is_active") is not False
+        ]
+        active_patient_ids = [patient["id"] for patient in active_patients]
+        active_patient_id_set = set(active_patient_ids)
+
+        now = datetime.now(UTC)
+        today_date = self._dashboard_date(now)
+        upcoming_until = now + timedelta(days=7)
+
+        diets, appointments, conditions, metrics = (
+            await asyncio.gather(
+                self._request(
+                    "GET",
+                    "/rest/v1/diets",
+                    params={
+                        "nutritionist_id": f"eq.{nutritionist['id']}",
+                        "select": "id,patient_id,title,is_active,updated_at,created_at",
+                        "order": "updated_at.desc.nullslast,created_at.desc",
+                    },
+                ),
+                self._request(
+                    "GET",
+                    "/rest/v1/patient_appointments",
+                    params={
+                        "nutritionist_id": f"eq.{nutritionist['id']}",
+                        "date": f"gte.{today_date}",
+                        "status": "neq.cancelado",
+                        "select": "id,patient_id,title,type,date,start_time,end_time,status,location,meeting_link",
+                        "order": "date.asc,start_time.asc",
+                        "limit": "100",
+                    },
+                ),
+                self._fetch_patient_rows(
+                    "patient_health_conditions",
+                    active_patient_ids,
+                    select=(
+                        "id,patient_id,condition_type,title,severity,created_at,"
+                        "started_at"
+                    ),
+                    order="created_at.desc",
+                    limit=150,
+                ),
+                self._fetch_patient_rows(
+                    "patient_variable_metrics",
+                    active_patient_ids,
+                    select="id,patient_id,name,recorded_at,created_at",
+                    order="recorded_at.desc.nullslast,created_at.desc",
+                    limit=300,
+                ),
+            )
+        )
+
+        active_diets = [
+            diet
+            for diet in diets
+            if diet.get("is_active") is not False
+            and diet.get("patient_id") in active_patient_id_set
+        ]
+        appointments_today = [
+            appointment
+            for appointment in appointments
+            if appointment.get("date") == today_date
+        ]
+        upcoming_appointments = [
+            {
+                **appointment,
+                "scheduled_at": self._appointment_datetime_value(appointment),
+            }
+            for appointment in appointments
+            if self._is_appointment_between(appointment, now, upcoming_until)
+        ][:30]
+        active_diet_patient_ids = {
+            diet["patient_id"] for diet in active_diets if diet.get("patient_id")
+        }
+        latest_metric_by_patient = self._latest_by_patient(metrics, "recorded_at")
+        next_appointment_by_patient = self._latest_by_patient(
+            upcoming_appointments,
+            "scheduled_at",
+            prefer_earliest=True,
+        )
+        latest_condition_by_patient = self._latest_by_patient(conditions, "created_at")
+
+        alerts = self._build_dashboard_alerts(
+            active_patients=active_patients,
+            active_diet_patient_ids=active_diet_patient_ids,
+            latest_metric_by_patient=latest_metric_by_patient,
+            latest_condition_by_patient=latest_condition_by_patient,
+            next_appointment_by_patient=next_appointment_by_patient,
+            now=now,
+        )
+
+        recent_patients = [
+            self._dashboard_patient_summary(
+                patient,
+                latest_metric_by_patient=latest_metric_by_patient,
+                next_appointment_by_patient=next_appointment_by_patient,
+                latest_condition_by_patient=latest_condition_by_patient,
+                active_diet_patient_ids=active_diet_patient_ids,
+                now=now,
+            )
+            for patient in active_patients[:6]
+        ]
+
+        return {
+            "nutritionist": nutritionist,
+            "stats": {
+                "active_patients": len(active_patients),
+                "appointments_today": len(appointments_today),
+                "active_diets": len(active_diets),
+                "important_alerts": len(alerts),
+            },
+            "recent_patients": recent_patients,
+            "alerts": alerts[:8],
+        }
+
     async def get_admin_workspace(self, token: str) -> dict:
         profile = await self.get_authenticated_profile(token)
         if profile["role"] != "admin":
@@ -348,6 +487,7 @@ class SupabaseWorkspaceService:
             diet["meals"] = meals.get(diet["id"], [])
         for workout in workouts:
             workout["exercises"] = exercises.get(workout["id"], [])
+        imports = await self._attach_import_files(imports)
 
         return {
             "patient": {
@@ -364,6 +504,8 @@ class SupabaseWorkspaceService:
             "workouts": workouts,
             "nutritionist_chats": [],
             "patient_chats": [],
+            "appointments": [],
+            "imports": [],
             "recent_professional_messages": [],
             "recent_personal_messages": [],
         }
@@ -383,6 +525,8 @@ class SupabaseWorkspaceService:
             main_metrics,
             variable_metrics,
             conditions,
+            appointments,
+            imports,
         ) = await asyncio.gather(
             self.get_profile(patient["user_id"]),
             self._request(
@@ -431,6 +575,26 @@ class SupabaseWorkspaceService:
                     "order": "created_at.desc",
                 },
             ),
+            self._request(
+                "GET",
+                "/rest/v1/patient_appointments",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "*",
+                    "order": "date.desc,start_time.desc",
+                    "limit": "120",
+                },
+            ),
+            self._request(
+                "GET",
+                "/rest/v1/patient_imports",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "*",
+                    "order": "created_at.desc",
+                    "limit": "30",
+                },
+            ),
         )
 
         meals, exercises = await asyncio.gather(
@@ -475,6 +639,8 @@ class SupabaseWorkspaceService:
             "workouts": workouts,
             "nutritionist_chats": nutritionist_chats,
             "patient_chats": patient_chats,
+            "appointments": appointments,
+            "imports": imports,
             "recent_professional_messages": recent_professional_messages,
             "recent_personal_messages": recent_personal_messages,
         }
@@ -950,21 +1116,60 @@ class SupabaseWorkspaceService:
         *,
         nutritionist_id: str,
         patient_id: str,
-        scheduled_at: str,
+        date: str,
+        start_time: str,
     ) -> dict | None:
         rows = await self._request(
             "GET",
-            "/rest/v1/appointments",
+            "/rest/v1/patient_appointments",
             params={
                 "nutritionist_id": f"eq.{nutritionist_id}",
                 "patient_id": f"eq.{patient_id}",
-                "scheduled_at": f"eq.{scheduled_at}",
-                "status": "neq.cancelled",
+                "date": f"eq.{date}",
+                "start_time": f"eq.{start_time}",
+                "status": "neq.cancelado",
                 "select": "*",
                 "limit": "1",
             },
         )
         return rows[0] if rows else None
+
+    async def create_patient_appointment(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        title: str,
+        type: str,
+        date: str,
+        start_time: str,
+        end_time: str | None = None,
+        location: str | None = None,
+        meeting_link: str | None = None,
+        status: str = "agendado",
+        description: str | None = None,
+        notes: str | None = None,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/patient_appointments",
+            json={
+                "nutritionist_id": nutritionist_id,
+                "patient_id": patient_id,
+                "title": title,
+                "type": type,
+                "description": description,
+                "date": date,
+                "start_time": start_time,
+                "end_time": end_time,
+                "location": location,
+                "meeting_link": meeting_link,
+                "status": status,
+                "notes": notes,
+            },
+            prefer="return=representation",
+        )
+        return rows[0]
 
     async def create_appointment_record(
         self,
@@ -976,21 +1181,17 @@ class SupabaseWorkspaceService:
         created_by: str,
         notes: str | None = None,
     ) -> dict:
-        rows = await self._request(
-            "POST",
-            "/rest/v1/appointments",
-            json={
-                "nutritionist_id": nutritionist_id,
-                "patient_id": patient_id,
-                "title": title,
-                "scheduled_at": scheduled_at,
-                "notes": notes,
-                "created_by": created_by,
-                "created_by_ai": True,
-            },
-            prefer="return=representation",
+        parsed = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
+        local = parsed.astimezone(ZoneInfo("America/Sao_Paulo"))
+        return await self.create_patient_appointment(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+            title=title,
+            type="consulta",
+            date=local.date().isoformat(),
+            start_time=local.time().replace(microsecond=0).isoformat(),
+            notes=notes,
         )
-        return rows[0]
 
     async def resolve_nutritionist_patient(
         self,
@@ -1357,6 +1558,343 @@ class SupabaseWorkspaceService:
                 detail="Paciente nao encontrado.",
             )
         return patient
+
+    async def _fetch_patient_rows(
+        self,
+        table: str,
+        patient_ids: list[str],
+        *,
+        select: str,
+        order: str,
+        limit: int,
+    ) -> list[dict]:
+        if not patient_ids:
+            return []
+
+        return await self._request(
+            "GET",
+            f"/rest/v1/{table}",
+            params={
+                "patient_id": f"in.({','.join(patient_ids)})",
+                "select": select,
+                "order": order,
+                "limit": str(limit),
+            },
+        )
+
+    async def _attach_import_files(self, imports: list[dict]) -> list[dict]:
+        if not imports:
+            return []
+
+        import_ids = [row["id"] for row in imports]
+        files = await self._request(
+            "GET",
+            "/rest/v1/patient_import_files",
+            params={
+                "import_id": f"in.({','.join(import_ids)})",
+                "select": "*",
+                "order": "order_index.asc",
+            },
+        )
+        by_import_id: dict[str, list[dict]] = {}
+        for file_row in files:
+            by_import_id.setdefault(file_row["import_id"], []).append(file_row)
+
+        return [
+            {**import_row, "files": by_import_id.get(import_row["id"], [])}
+            for import_row in imports
+        ]
+
+    def _dedupe_patients(self, patients: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen_patient_ids: set[str] = set()
+        seen_user_ids: set[str] = set()
+
+        for patient in patients:
+            patient_id = patient.get("id")
+            user_id = patient.get("user_id")
+            if patient_id in seen_patient_ids or user_id in seen_user_ids:
+                continue
+
+            if patient_id:
+                seen_patient_ids.add(patient_id)
+            if user_id:
+                seen_user_ids.add(user_id)
+            deduped.append(patient)
+
+        return deduped
+
+    def _latest_by_patient(
+        self,
+        rows: list[dict],
+        date_field: str,
+        *,
+        prefer_earliest: bool = False,
+    ) -> dict[str, dict]:
+        selected: dict[str, dict] = {}
+
+        for row in rows:
+            patient_id = row.get("patient_id")
+            if not patient_id:
+                continue
+
+            current = selected.get(patient_id)
+            if not current:
+                selected[patient_id] = row
+                continue
+
+            current_date = self._parse_datetime(current.get(date_field))
+            row_date = self._parse_datetime(row.get(date_field))
+            if not row_date:
+                continue
+            if not current_date:
+                selected[patient_id] = row
+                continue
+
+            if prefer_earliest and row_date < current_date:
+                selected[patient_id] = row
+            elif not prefer_earliest and row_date > current_date:
+                selected[patient_id] = row
+
+        return selected
+
+    def _dashboard_patient_summary(
+        self,
+        patient: dict,
+        *,
+        latest_metric_by_patient: dict[str, dict],
+        next_appointment_by_patient: dict[str, dict],
+        latest_condition_by_patient: dict[str, dict],
+        active_diet_patient_ids: set[str],
+        now: datetime,
+    ) -> dict:
+        patient_id = patient["id"]
+        profile = patient.get("profile") or {}
+        latest_metric = latest_metric_by_patient.get(patient_id)
+        latest_condition = latest_condition_by_patient.get(patient_id)
+        next_appointment = next_appointment_by_patient.get(patient_id)
+        latest_update_at = self._latest_datetime_value(
+            patient.get("updated_at"),
+            patient.get("created_at"),
+            latest_metric.get("recorded_at") if latest_metric else None,
+            latest_metric.get("created_at") if latest_metric else None,
+        )
+
+        alert = self._patient_alert_label(
+            patient,
+            latest_metric=latest_metric,
+            latest_condition=latest_condition,
+            next_appointment=next_appointment,
+            has_active_diet=patient_id in active_diet_patient_ids,
+            now=now,
+        )
+
+        return {
+            "id": patient_id,
+            "name": profile.get("full_name") or "Paciente",
+            "objective": patient.get("objective"),
+            "status": "Ativo" if patient.get("is_active") is not False else "Inativo",
+            "is_active": patient.get("is_active") is not False,
+            "last_update_at": latest_update_at,
+            "next_appointment_at": (
+                next_appointment.get("scheduled_at") if next_appointment else None
+            ),
+            "alert": alert,
+        }
+
+    def _build_dashboard_alerts(
+        self,
+        *,
+        active_patients: list[dict],
+        active_diet_patient_ids: set[str],
+        latest_metric_by_patient: dict[str, dict],
+        latest_condition_by_patient: dict[str, dict],
+        next_appointment_by_patient: dict[str, dict],
+        now: datetime,
+    ) -> list[dict]:
+        alerts: list[dict] = []
+        stale_cutoff = now - timedelta(days=14)
+        upcoming_cutoff = now + timedelta(days=2)
+
+        for patient in active_patients:
+            patient_id = patient["id"]
+            profile = patient.get("profile") or {}
+            patient_name = profile.get("full_name") or "Paciente"
+            latest_metric = latest_metric_by_patient.get(patient_id)
+            latest_metric_at = self._parse_datetime(
+                latest_metric.get("recorded_at") if latest_metric else None
+            ) or self._parse_datetime(
+                latest_metric.get("created_at") if latest_metric else None
+            )
+
+            if not latest_metric_at or latest_metric_at < stale_cutoff:
+                alerts.append(
+                    {
+                        "id": f"{patient_id}:stale-evolution",
+                        "type": "evolution",
+                        "tone": "amber",
+                        "title": "Evolucao sem atualizacao recente",
+                        "description": (
+                            "Revise medidas ou acompanhamento deste paciente."
+                        ),
+                        "patient_id": patient_id,
+                        "patient_name": patient_name,
+                        "date": latest_metric_at.isoformat() if latest_metric_at else None,
+                    }
+                )
+
+            if patient_id not in active_diet_patient_ids:
+                alerts.append(
+                    {
+                        "id": f"{patient_id}:missing-diet",
+                        "type": "diet",
+                        "tone": "red",
+                        "title": "Plano alimentar pendente",
+                        "description": "Paciente ativo sem plano alimentar ativo.",
+                        "patient_id": patient_id,
+                        "patient_name": patient_name,
+                        "date": None,
+                    }
+                )
+
+            condition = latest_condition_by_patient.get(patient_id)
+            if condition:
+                alerts.append(
+                    {
+                        "id": f"{patient_id}:condition:{condition['id']}",
+                        "type": "condition",
+                        "tone": "blue",
+                        "title": condition.get("title") or "Condicao ativa",
+                        "description": self._condition_description(condition),
+                        "patient_id": patient_id,
+                        "patient_name": patient_name,
+                        "date": condition.get("created_at") or condition.get("started_at"),
+                    }
+                )
+
+            appointment = next_appointment_by_patient.get(patient_id)
+            appointment_at = self._parse_datetime(
+                appointment.get("scheduled_at") if appointment else None
+            )
+            if appointment_at and appointment_at <= upcoming_cutoff:
+                alerts.append(
+                    {
+                        "id": f"{patient_id}:appointment:{appointment['id']}",
+                        "type": "appointment",
+                        "tone": "green",
+                        "title": "Consulta proxima",
+                        "description": appointment.get("title") or "Acompanhamento agendado.",
+                        "patient_id": patient_id,
+                        "patient_name": patient_name,
+                        "date": appointment.get("scheduled_at"),
+                    }
+                )
+
+        tone_order = {"red": 0, "amber": 1, "blue": 2, "green": 3}
+        return sorted(
+            alerts,
+            key=lambda alert: (
+                tone_order.get(alert["tone"], 9),
+                alert.get("date") or "",
+                alert["patient_name"],
+            ),
+        )
+
+    def _patient_alert_label(
+        self,
+        patient: dict,
+        *,
+        latest_metric: dict | None,
+        latest_condition: dict | None,
+        next_appointment: dict | None,
+        has_active_diet: bool,
+        now: datetime,
+    ) -> str | None:
+        latest_metric_at = self._parse_datetime(
+            latest_metric.get("recorded_at") if latest_metric else None
+        ) or self._parse_datetime(
+            latest_metric.get("created_at") if latest_metric else None
+        )
+        if patient.get("is_active") is not False and not has_active_diet:
+            return "Plano pendente"
+        if patient.get("is_active") is not False and (
+            not latest_metric_at or latest_metric_at < now - timedelta(days=14)
+        ):
+            return "Atualizar evolucao"
+        if latest_condition:
+            return "Condicao ativa"
+
+        appointment_at = self._parse_datetime(
+            next_appointment.get("scheduled_at") if next_appointment else None
+        )
+        if appointment_at and appointment_at <= now + timedelta(days=2):
+            return "Consulta proxima"
+
+        return None
+
+    def _latest_datetime_value(self, *values: str | None) -> str | None:
+        latest: datetime | None = None
+        latest_value: str | None = None
+        for value in values:
+            parsed = self._parse_datetime(value)
+            if parsed and (not latest or parsed > latest):
+                latest = parsed
+                latest_value = value
+        return latest_value
+
+    def _is_between(
+        self,
+        value: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> bool:
+        parsed = self._parse_datetime(value)
+        return bool(parsed and start <= parsed < end)
+
+    def _dashboard_date(self, value: datetime) -> str:
+        try:
+            dashboard_timezone = ZoneInfo("America/Sao_Paulo")
+        except ZoneInfoNotFoundError:
+            dashboard_timezone = UTC
+
+        return value.astimezone(dashboard_timezone).date().isoformat()
+
+    def _is_appointment_between(
+        self,
+        appointment: dict,
+        start: datetime,
+        end: datetime,
+    ) -> bool:
+        parsed = self._parse_datetime(self._appointment_datetime_value(appointment))
+        return bool(parsed and start <= parsed < end)
+
+    def _appointment_datetime_value(self, appointment: dict) -> str | None:
+        date_value = appointment.get("date")
+        start_time = appointment.get("start_time")
+        if not date_value or not start_time:
+            return None
+
+        return f"{date_value}T{str(start_time)[:8]}-03:00"
+
+    def _parse_datetime(self, value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            normalized = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+    def _condition_description(self, condition: dict) -> str:
+        condition_type = condition.get("condition_type") or "condicao"
+        severity = condition.get("severity")
+        if severity:
+            return f"{condition_type} registrada com severidade {severity}."
+        return f"{condition_type} registrada no acompanhamento."
 
     async def _attach_profiles(self, patients: list[dict]) -> list[dict]:
         if not patients:

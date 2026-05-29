@@ -1,4 +1,5 @@
 import type { User } from '@supabase/supabase-js'
+import { USER_MESSAGES, sanitizeUserMessage } from '../../../constants/messages'
 import { supabase } from '../../../lib/supabase'
 import type {
   ChangePasswordInput,
@@ -8,7 +9,7 @@ import type {
 
 function assertSupabase() {
   if (!supabase) {
-    throw new Error('Supabase nao configurado. Crie um .env com VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.')
+    throw new Error(USER_MESSAGES.unavailableConfig)
   }
 
   return supabase
@@ -22,7 +23,7 @@ export async function signIn(input: LoginInput) {
   })
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(sanitizeUserMessage(error.message, USER_MESSAGES.loginError))
   }
 
   return data
@@ -45,7 +46,7 @@ export async function requestPasswordReset(input: ForgotPasswordInput) {
   })
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(sanitizeUserMessage(error.message, 'Não foi possível enviar o e-mail de recuperação.'))
   }
 }
 
@@ -54,7 +55,7 @@ export async function signOut() {
   const { error } = await client.auth.signOut()
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(sanitizeUserMessage(error.message, USER_MESSAGES.actionError))
   }
 }
 
@@ -63,7 +64,7 @@ export async function getInitialSession() {
   const { data, error } = await client.auth.getSession()
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(sanitizeUserMessage(error.message, USER_MESSAGES.missingSession))
   }
 
   return data.session
@@ -79,7 +80,7 @@ export async function updatePassword(input: ChangePasswordInput) {
   const currentUserResponse = await client.auth.getUser()
 
   if (currentUserResponse.error) {
-    throw new Error(currentUserResponse.error.message)
+    throw new Error(sanitizeUserMessage(currentUserResponse.error.message, USER_MESSAGES.missingSession))
   }
 
   const currentMetadata = currentUserResponse.data.user?.user_metadata ?? {}
@@ -93,7 +94,7 @@ export async function updatePassword(input: ChangePasswordInput) {
   })
 
   if (error) {
-    throw new Error(error.message)
+    throw new Error(sanitizeUserMessage(error.message, 'Não foi possível atualizar a senha.'))
   }
 
   return data.user

@@ -1,19 +1,26 @@
+import { USER_MESSAGES, sanitizeUserMessage } from '../../../constants/messages'
 import { supabase } from '../../../lib/supabase'
 import type {
   DietMealRecord,
   DietRecord,
   HealthConditionRecord,
   MetricRecord,
+  NotificationRecord,
+  PatientAppointmentRecord,
   WorkoutExerciseRecord,
   WorkoutRecord,
 } from '../types'
 
 function getClient() {
   if (!supabase) {
-    throw new Error('Supabase nao configurado. Confira o arquivo .env.')
+    throw new Error(USER_MESSAGES.unavailableConfig)
   }
 
   return supabase
+}
+
+function throwClinicalError(message?: string): never {
+  throw new Error(sanitizeUserMessage(message, USER_MESSAGES.actionError))
 }
 
 export async function createDiet(payload: {
@@ -35,7 +42,7 @@ export async function createDiet(payload: {
     .select('*')
     .single<DietRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
@@ -51,14 +58,14 @@ export async function updateDiet(
     .select('*')
     .single<DietRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
 export async function deleteDiet(dietId: string) {
   const client = getClient()
   const { error } = await client.from('diets').delete().eq('id', dietId)
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
 }
 
 export async function duplicateDiet(diet: DietRecord) {
@@ -116,14 +123,14 @@ export async function upsertDietMeals(
     .select('*')
     .returns<DietMealRecord[]>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
 export async function deleteDietMeal(mealId: string) {
   const client = getClient()
   const { error } = await client.from('diet_meals').delete().eq('id', mealId)
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
 }
 
 export async function createWorkout(payload: {
@@ -141,7 +148,7 @@ export async function createWorkout(payload: {
     .select('*')
     .single<WorkoutRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
@@ -157,14 +164,14 @@ export async function updateWorkout(
     .select('*')
     .single<WorkoutRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
 export async function deleteWorkout(workoutId: string) {
   const client = getClient()
   const { error } = await client.from('workouts').delete().eq('id', workoutId)
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
 }
 
 export async function upsertWorkoutExercises(
@@ -192,7 +199,7 @@ export async function upsertWorkoutExercises(
     .select('*')
     .returns<WorkoutExerciseRecord[]>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
@@ -203,7 +210,7 @@ export async function deleteWorkoutExercise(exerciseId: string) {
     .delete()
     .eq('id', exerciseId)
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
 }
 
 export async function createMainMetric(payload: {
@@ -220,7 +227,7 @@ export async function createMainMetric(payload: {
     .select('*')
     .single<MetricRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
@@ -238,7 +245,7 @@ export async function createVariableMetric(payload: {
     .select('*')
     .single<MetricRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
@@ -248,7 +255,7 @@ export async function deleteMetric(
 ) {
   const client = getClient()
   const { error } = await client.from(table).delete().eq('id', metricId)
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
 }
 
 export async function createHealthCondition(payload: {
@@ -270,7 +277,7 @@ export async function createHealthCondition(payload: {
     .select('*')
     .single<HealthConditionRecord>()
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
   return data
 }
 
@@ -281,5 +288,89 @@ export async function deleteHealthCondition(conditionId: string) {
     .delete()
     .eq('id', conditionId)
 
-  if (error) throw new Error(error.message)
+  if (error) throwClinicalError(error.message)
+}
+
+export async function createPatientAppointment(
+  payload: Omit<PatientAppointmentRecord, 'id' | 'patient_user_id' | 'created_at' | 'updated_at'>,
+) {
+  const client = getClient()
+  const { data, error } = await client
+    .from('patient_appointments')
+    .insert(payload)
+    .select('*')
+    .single<PatientAppointmentRecord>()
+
+  if (error) throwClinicalError(error.message)
+  return data
+}
+
+export async function updatePatientAppointment(
+  appointmentId: string,
+  payload: Partial<
+    Omit<
+      PatientAppointmentRecord,
+      'id' | 'patient_id' | 'patient_user_id' | 'nutritionist_id' | 'created_at' | 'updated_at'
+    >
+  >,
+) {
+  const client = getClient()
+  const { data, error } = await client
+    .from('patient_appointments')
+    .update(payload)
+    .eq('id', appointmentId)
+    .select('*')
+    .single<PatientAppointmentRecord>()
+
+  if (error) throwClinicalError(error.message)
+  return data
+}
+
+export async function deletePatientAppointment(appointmentId: string) {
+  const client = getClient()
+  const { error } = await client
+    .from('patient_appointments')
+    .delete()
+    .eq('id', appointmentId)
+
+  if (error) throwClinicalError(error.message)
+}
+
+export async function getNotifications() {
+  const client = getClient()
+  const { data, error } = await client
+    .from('notifications')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(30)
+    .returns<NotificationRecord[]>()
+
+  if (error) throwClinicalError(error.message)
+  return data
+}
+
+export async function markNotificationRead(notificationId: string) {
+  const client = getClient()
+  const { data, error } = await client
+    .from('notifications')
+    .update({ read: true })
+    .eq('id', notificationId)
+    .select('*')
+    .single<NotificationRecord>()
+
+  if (error) throwClinicalError(error.message)
+  return data
+}
+
+export async function markAllNotificationsRead() {
+  const client = getClient()
+  const { data, error } = await client
+    .from('notifications')
+    .update({ read: true })
+    .eq('read', false)
+    .select('*')
+    .returns<NotificationRecord[]>()
+
+  if (error) throwClinicalError(error.message)
+  return data
 }

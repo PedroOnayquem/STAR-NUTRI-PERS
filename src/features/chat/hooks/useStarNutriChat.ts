@@ -29,14 +29,15 @@ export function useStarNutriChat({
   const [streamingActions, setStreamingActions] = useState<unknown[]>([])
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessageRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const scopedPatientId = scope === 'nutritionist' ? patientId : undefined
 
   const sessionsQueryKey = useMemo(
     () => [
       'chat-sessions',
       scope,
-      patientId ?? (scope === 'nutritionist' ? 'general' : 'me'),
+      scopedPatientId ?? (scope === 'nutritionist' ? 'general' : 'me'),
     ],
-    [patientId, scope],
+    [scopedPatientId, scope],
   )
   const canUseChat = Boolean(
     session &&
@@ -46,7 +47,7 @@ export function useStarNutriChat({
 
   const sessionsQuery = useQuery({
     queryKey: sessionsQueryKey,
-    queryFn: () => listChatSessions(session, scope, patientId),
+    queryFn: () => listChatSessions(session, scope, scopedPatientId),
     enabled: canUseChat,
   })
 
@@ -115,13 +116,13 @@ export function useStarNutriChat({
   const createSessionMutation = useMutation({
     mutationFn: () => {
       if (!canUseChat) {
-        throw new Error('Nao foi possivel criar uma conversa agora.')
+        throw new Error('Não foi possível criar uma conversa agora.')
       }
 
       return createChatSession(session, scope, {
-        patientId,
+        patientId: scopedPatientId,
         title:
-          scope === 'nutritionist' && !patientId
+          scope === 'nutritionist' && !scopedPatientId
             ? 'Nova conversa geral'
             : 'Nova conversa',
       })
@@ -136,14 +137,14 @@ export function useStarNutriChat({
       queryClient.setQueryData(['chat-messages', scope, created.id], [])
     },
     onError: (caught) => {
-      setError(caught instanceof Error ? caught.message : 'Nao foi possivel criar a conversa.')
+      setError(caught instanceof Error ? caught.message : 'Não foi possível criar a conversa.')
     },
   })
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
       if (!canUseChat) {
-        throw new Error('Nao foi possivel iniciar o chat agora.')
+        throw new Error('Não foi possível iniciar o chat agora.')
       }
 
       setError(null)
@@ -161,7 +162,7 @@ export function useStarNutriChat({
 
       await sendChatMessageStream({
         content,
-        patientId,
+        patientId: scopedPatientId,
         reasoningLevel,
         scope,
         session,

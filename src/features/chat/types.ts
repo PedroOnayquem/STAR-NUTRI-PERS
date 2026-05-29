@@ -9,26 +9,26 @@ export const AI_REASONING_LEVELS: Array<{
 }> = [
   {
     id: 'low',
-    label: 'Pensamento Baixo',
+    label: 'Raciocínio baixo',
     shortLabel: 'Baixo',
-    description: 'Rapido e objetivo',
+    description: 'Rápido e objetivo',
   },
   {
     id: 'medium',
-    label: 'Pensamento Medio',
-    shortLabel: 'Medio',
+    label: 'Raciocínio médio',
+    shortLabel: 'Médio',
     description: 'Equilibrado',
   },
   {
     id: 'high',
-    label: 'Pensamento Alto',
+    label: 'Raciocínio alto',
     shortLabel: 'Alto',
-    description: 'Mais analitico',
+    description: 'Mais analítico',
   },
   {
     id: 'ultra',
-    label: 'Pensamento Altissimo',
-    shortLabel: 'Altissimo',
+    label: 'Raciocínio altíssimo',
+    shortLabel: 'Altíssimo',
     description: 'Profundo e detalhado',
   },
 ]
