@@ -14,12 +14,15 @@ import {
   UserRound,
   Users,
 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useAuth } from '../../features/auth/useAuth'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/Button'
 import { Badge } from '../ui/Badge'
 import { NotificationBell } from '../notifications/NotificationBell'
+import { PwaInstallButton } from '../pwa/PwaInstallButton'
+import { Logo } from '../Logo'
+import { resolveNutritionistAvatarUrl } from '../../lib/storageImages'
 
 const navByRole = {
   admin: [
@@ -30,6 +33,7 @@ const navByRole = {
     { to: '/nutritionist', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/nutritionist/NutritionistDashboardPage') },
     { to: '/nutritionist/patients', label: 'Pacientes', icon: <Users size={18} />, preload: () => import('../../pages/nutritionist/PatientsPage') },
     { to: '/nutritionist/chat', label: 'Chat IA', icon: <Bot size={18} />, preload: () => import('../../pages/nutritionist/NutritionistChatPage') },
+    { to: '/nutritionist/profile', label: 'Perfil', icon: <UserRound size={18} />, preload: () => import('../../pages/nutritionist/NutritionistProfilePage') },
   ],
   patient: [
     { to: '/patient', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/patient/PatientWorkspacePage') },
@@ -54,7 +58,8 @@ export function AuthenticatedLayout({
   const location = useLocation()
   const navItems = profile ? navByRole[profile.role] : []
   const hideGlobalSearch =
-    profile?.role === 'nutritionist' && location.pathname === '/nutritionist'
+    profile?.role === 'patient' ||
+    (profile?.role === 'nutritionist' && location.pathname === '/nutritionist')
 
   async function handleLogout() {
     await logout()
@@ -67,14 +72,19 @@ export function AuthenticatedLayout({
         <Brand />
 
         <div className="mt-6 rounded-2xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50 to-cyan-50 p-4 dark:border-emerald-400/20 dark:from-emerald-400/10 dark:to-cyan-400/10">
-          <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
-            <Sparkles size={16} />
-            <p className="text-xs font-black uppercase">Conta ativa</p>
+          <div className="flex items-center gap-3">
+            <ProfileAvatar imageUrl={profile?.avatarUrl} name={profile?.fullName} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
+                <Sparkles size={16} />
+                <p className="text-xs font-black uppercase">Conta ativa</p>
+              </div>
+              <p className="mt-1 truncate text-sm font-bold">{profile?.fullName}</p>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                {profile?.role}
+              </p>
+            </div>
           </div>
-          <p className="mt-2 text-sm font-bold">{profile?.fullName}</p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {profile?.role}
-          </p>
         </div>
 
         <nav className="mt-6 space-y-1.5">
@@ -108,6 +118,7 @@ export function AuthenticatedLayout({
 
             <div className="flex items-center gap-2">
               <Badge tone="green">Online</Badge>
+              <PwaInstallButton />
               <NotificationBell />
               <Button
                 aria-label="Alternar tema"
@@ -224,18 +235,49 @@ function NavLink({
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 via-teal-400 to-cyan-400 text-sm font-black text-slate-950 shadow-[0_14px_40px_rgba(16,185,129,0.30)]">
-        SN
-      </div>
-      {!compact && (
-        <div>
-          <p className="text-base font-black">Star Nutri</p>
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Nutrição inteligente
-          </p>
-        </div>
-      )}
-      {compact && <UserRound className="text-slate-500" size={20} />}
+      <Logo
+        className={compact ? 'h-10 w-auto max-w-[140px]' : 'h-12 w-auto max-w-[180px]'}
+        showText={!compact}
+      />
     </div>
   )
+}
+
+function ProfileAvatar({
+  imageUrl,
+  name,
+}: {
+  imageUrl?: string | null
+  name?: string | null
+}) {
+  const resolvedImageUrl = resolveNutritionistAvatarUrl(imageUrl)
+  const [imageFailed, setImageFailed] = useState(false)
+
+  useEffect(() => {
+    setImageFailed(false)
+  }, [resolvedImageUrl])
+
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/60 bg-white/80 text-sm font-black text-emerald-800 shadow-sm dark:border-white/10 dark:bg-slate-950/50 dark:text-emerald-100">
+      {resolvedImageUrl && !imageFailed ? (
+        <img
+          alt={name ?? 'Perfil'}
+          className="h-full w-full object-cover"
+          onError={() => setImageFailed(true)}
+          src={resolvedImageUrl}
+        />
+      ) : (
+        <span>{getInitials(name ?? 'Nutricionista')}</span>
+      )}
+    </div>
+  )
+}
+
+function getInitials(value: string) {
+  return value
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || 'N'
 }

@@ -1,0 +1,22 @@
+{
+  "name": "Star Nutri",
+  "short_name": "Star Nutri",
+  "description": "Sistema inteligente para nutricionistas e pacientes.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "browser"],
+  "background_color": "#020617",
+  "theme_color": "#00C9A7",
+  "orientation": "portrait-primary",
+  "categories": ["health", "medical", "productivity"],
+  "icons": [
+    {
+      "src": "/ESCURO.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -35,6 +35,11 @@ class Settings:
         self.app_env: str = getenv("APP_ENV", "development")
         self.frontend_origins: list[str] = parse_frontend_origins()
         self.supabase_url: str | None = getenv("SUPABASE_URL")
+        self.supabase_public_url: str | None = (
+            getenv("SUPABASE_PUBLIC_URL")
+            or getenv("VITE_SUPABASE_URL")
+            or self.supabase_url
+        )
         self.supabase_service_role_key: str | None = getenv("SUPABASE_SERVICE_ROLE_KEY")
         self.openai_api_key: str | None = getenv("OPENAI_API_KEY")
         self.openai_base_url: str = getenv(

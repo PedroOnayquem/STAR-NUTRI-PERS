@@ -905,7 +905,7 @@ function getInitials(name: string) {
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
-    .join('') || 'SN'
+    .join('') || 'IA'
 }
 
 function reasoningDotClass(level: AiReasoningLevel) {

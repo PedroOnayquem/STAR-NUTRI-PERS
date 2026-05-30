@@ -84,6 +84,15 @@ export function useStarNutriChat({
     })
   }, [queryClient, scope])
 
+  const cacheCreatedSession = useCallback((created: ChatSessionRecord) => {
+    setSelectedSessionId(created.id)
+    queryClient.setQueryData<ChatSessionRecord[]>(sessionsQueryKey, (current = []) => [
+      created,
+      ...current.filter((item) => item.id !== created.id),
+    ])
+    queryClient.setQueryData(['chat-messages', scope, created.id], [])
+  }, [queryClient, scope, sessionsQueryKey])
+
   useEffect(() => {
     if (!supabase || !activeSessionId) return
     const client = supabase
@@ -129,12 +138,7 @@ export function useStarNutriChat({
     },
     onSuccess: (created) => {
       setError(null)
-      setSelectedSessionId(created.id)
-      queryClient.setQueryData<ChatSessionRecord[]>(sessionsQueryKey, (current = []) => [
-        created,
-        ...current.filter((item) => item.id !== created.id),
-      ])
-      queryClient.setQueryData(['chat-messages', scope, created.id], [])
+      cacheCreatedSession(created)
     },
     onError: (caught) => {
       setError(caught instanceof Error ? caught.message : 'Não foi possível criar a conversa.')
@@ -150,10 +154,22 @@ export function useStarNutriChat({
       setError(null)
       setStreaming('')
       setStreamingActions([])
-      const tempSessionId = activeSessionId || 'new'
+      let resolvedSessionId = activeSessionId
+      if (!resolvedSessionId) {
+        const created = await createChatSession(session, scope, {
+          patientId: scopedPatientId,
+          title:
+            scope === 'nutritionist' && !scopedPatientId
+              ? 'Nova conversa geral'
+              : 'Nova conversa',
+        })
+        cacheCreatedSession(created)
+        resolvedSessionId = created.id
+      }
+
       setPendingUserMessage({
         id: `pending-${Date.now()}`,
-        chat_id: tempSessionId,
+        chat_id: resolvedSessionId,
         sender: scope === 'nutritionist' ? 'nutritionist' : 'patient',
         content,
         metadata: null,
@@ -166,7 +182,7 @@ export function useStarNutriChat({
         reasoningLevel,
         scope,
         session,
-        sessionId: activeSessionId,
+        sessionId: resolvedSessionId,
         onSession: (sessionId) => {
           setSelectedSessionId(sessionId)
           setPendingUserMessage((message) =>

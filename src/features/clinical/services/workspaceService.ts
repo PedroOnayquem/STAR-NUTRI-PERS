@@ -1,5 +1,5 @@
 import type { Session } from '@supabase/supabase-js'
-import { apiRequest } from '../../../lib/api'
+import { apiRequest, requireApiBaseUrl } from '../../../lib/api'
 import type {
   AdminWorkspace,
   NutritionistDashboard,
@@ -7,12 +7,63 @@ import type {
   PatientContext,
 } from '../types'
 
+export type NutritionistProfileForm = {
+  bio?: string | null
+  clinic_name?: string | null
+  image?: File | null
+  phone?: string | null
+  professional_name?: string | null
+  remove_image?: boolean
+}
+
 export function getNutritionistWorkspace(session: Session | null) {
   return apiRequest<NutritionistWorkspace>('/api/nutritionists/workspace', session)
 }
 
 export function getNutritionistDashboard(session: Session | null) {
   return apiRequest<NutritionistDashboard>('/api/nutritionists/dashboard', session)
+}
+
+export async function updateNutritionistProfile(
+  session: Session | null,
+  payload: NutritionistProfileForm,
+) {
+  if (!session?.access_token) {
+    throw new Error('Sua sessão expirou. Entre novamente para continuar.')
+  }
+
+  const formData = new FormData()
+  formData.set('professional_name', payload.professional_name ?? '')
+  formData.set('clinic_name', payload.clinic_name ?? '')
+  formData.set('phone', payload.phone ?? '')
+  formData.set('bio', payload.bio ?? '')
+  formData.set('remove_image', payload.remove_image ? 'true' : 'false')
+  if (payload.image) {
+    formData.set('image', payload.image)
+  }
+
+  const response = await fetch(`${requireApiBaseUrl()}/api/nutritionists/profile`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: formData,
+  }).catch(() => {
+    throw new Error('Não foi possível conectar ao Star Nutri. Tente novamente em instantes.')
+  })
+
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    const detail = Array.isArray(body?.detail)
+      ? body.detail.map((item: { msg?: string }) => item.msg).join(' | ')
+      : body?.detail
+    throw new Error(detail || 'Não foi possível salvar o perfil do nutricionista.')
+  }
+
+  return body as {
+    nutritionist: NutritionistWorkspace['nutritionist']
+    profile: NutritionistWorkspace['profile']
+  }
 }
 
 export function getNutritionistPatientContext(

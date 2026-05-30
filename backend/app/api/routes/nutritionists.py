@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from ...schemas.patients import CreatePatientRequest, CreatePatientResponse
 from ...schemas.workspace import UpdatePatientRequest
@@ -8,6 +8,28 @@ from ...services.supabase_workspace_service import SupabaseWorkspaceService
 from .admin import get_bearer_token
 
 router = APIRouter(prefix="/nutritionists", tags=["nutritionists"])
+
+
+@router.patch("/profile")
+async def update_profile(
+    professional_name: str | None = Form(None),
+    clinic_name: str | None = Form(None),
+    phone: str | None = Form(None),
+    bio: str | None = Form(None),
+    remove_image: bool = Form(False),
+    image: UploadFile | None = File(None),
+    token: str = Depends(get_bearer_token),
+) -> dict:
+    service = SupabaseWorkspaceService()
+    return await service.update_nutritionist_profile(
+        token,
+        professional_name=professional_name,
+        clinic_name=clinic_name,
+        phone=phone,
+        bio=bio,
+        remove_image=remove_image,
+        image=image,
+    )
 
 
 @router.post("/patients", response_model=CreatePatientResponse)

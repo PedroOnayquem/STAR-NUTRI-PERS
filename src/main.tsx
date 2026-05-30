@@ -5,6 +5,9 @@ import './styles.css'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { queryClient } from './lib/queryClient'
+import { registerServiceWorker } from './features/pwa/serviceWorker'
+
+registerServiceWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

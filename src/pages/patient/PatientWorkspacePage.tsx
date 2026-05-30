@@ -30,6 +30,7 @@ import { Input } from '../../components/ui/Input'
 import { SectionHeader } from '../../components/ui/SectionHeader'
 import { PageSkeleton } from '../../components/ui/Skeleton'
 import { StatCard } from '../../components/ui/StatCard'
+import { NutritionistAvatar } from '../../components/nutritionist/NutritionistAvatar'
 import { ChatExperience } from '../../features/chat/components/ChatExperience'
 import { useAuth } from '../../features/auth/useAuth'
 import { createVariableMetric } from '../../features/clinical/services/clinicalDataService'
@@ -102,6 +103,22 @@ function PatientDashboard({ context }: { context: PatientContext }) {
         <StatCard caption="último registro" icon={<Activity size={20} />} label="Peso" value={latestWeight ? `${latestWeight.value} ${latestWeight.unit ?? ''}` : '-'} />
       </div>
       <div className="mt-6 grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <Card className="p-5">
+          <div className="flex items-center gap-4">
+            <NutritionistAvatar nutritionist={context.nutritionist} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">
+                Nutricionista responsável
+              </p>
+              <h2 className="mt-1 truncate font-black">
+                {context.nutritionist?.professional_name || 'Profissional não informado'}
+              </h2>
+              <p className="mt-1 truncate text-sm text-slate-500 dark:text-slate-400">
+                {context.nutritionist?.clinic_name || context.nutritionist?.specialty || 'Clínica não informada'}
+              </p>
+            </div>
+          </div>
+        </Card>
         <Card className="p-5" variant="glass">
           <div className="flex items-center gap-3">
             <div className="rounded-xl bg-emerald-500/10 p-2.5 text-emerald-700 dark:text-emerald-300">

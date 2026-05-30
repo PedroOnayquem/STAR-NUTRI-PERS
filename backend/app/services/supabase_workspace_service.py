@@ -4,13 +4,24 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from typing import Any
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 
 from ..core.config import settings
 from ..schemas.workspace import UpdateMyPatientProfileRequest, UpdatePatientRequest
+
+
+MAX_NUTRITIONIST_IMAGE_BYTES = 5 * 1024 * 1024
+NUTRITIONIST_IMAGE_MIME_TYPES = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+_UNSET = object()
 
 
 class SupabaseWorkspaceService:
@@ -78,6 +89,45 @@ class SupabaseWorkspaceService:
             return None
 
         return response.json()
+
+    async def _storage_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        request_headers = {
+            "apikey": self.service_key,
+            "Authorization": f"Bearer {self.service_key}",
+            **(headers or {}),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=45) as client:
+                response = await client.request(
+                    method,
+                    f"{self.supabase_url}{path}",
+                    headers=request_headers,
+                    content=content,
+                )
+        except httpx.RequestError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Não foi possível acessar o armazenamento de imagens.",
+            ) from None
+
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Não foi possível salvar a imagem enviada.",
+            )
+        if not response.content:
+            return {}
+        try:
+            return response.json()
+        except ValueError:
+            return {}
 
     async def get_user_from_access_token(self, token: str) -> dict:
         try:
@@ -178,8 +228,208 @@ class SupabaseWorkspaceService:
 
         return {
             "nutritionist": nutritionist,
+            "profile": profile,
             "patients": await self._attach_profiles(patients),
         }
+
+    async def update_nutritionist_profile(
+        self,
+        token: str,
+        *,
+        professional_name: str | None,
+        clinic_name: str | None,
+        phone: str | None,
+        bio: str | None,
+        remove_image: bool,
+        image: UploadFile | None,
+    ) -> dict:
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas podem atualizar este perfil.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        image_path: str | None | object = _UNSET
+        image_url: str | None | object = _UNSET
+        if image is not None:
+            uploaded_image = await self._upload_nutritionist_image(nutritionist["id"], image)
+            image_path = uploaded_image["path"]
+            image_url = uploaded_image["public_url"]
+        elif remove_image:
+            image_path = None
+            image_url = None
+
+        next_professional_name = self._nullable_text(professional_name)
+        next_clinic_name = self._nullable_text(clinic_name)
+        next_phone = self._nullable_text(phone)
+        next_bio = self._nullable_multiline_text(bio)
+
+        nutritionist_payload: dict[str, Any] = {
+            "professional_name": next_professional_name,
+            "clinic_name": next_clinic_name,
+            "phone": next_phone,
+            "bio": next_bio,
+        }
+        if image_path is not _UNSET:
+            nutritionist_payload["avatar_path"] = image_path
+            nutritionist_payload["logo_path"] = image_path
+            nutritionist_payload["avatar_url"] = image_url
+            nutritionist_payload["logo_url"] = image_url
+
+        updated_rows = await self._request(
+            "PATCH",
+            "/rest/v1/nutritionists",
+            params={"id": f"eq.{nutritionist['id']}"},
+            json=nutritionist_payload,
+            prefer="return=representation",
+        )
+        updated_nutritionist = updated_rows[0] if updated_rows else {
+            **nutritionist,
+            **nutritionist_payload,
+        }
+
+        profile_payload: dict[str, Any] = {"phone": next_phone}
+        if next_professional_name:
+            profile_payload["full_name"] = next_professional_name
+        if image_url is not _UNSET:
+            profile_payload["avatar_url"] = image_url
+
+        updated_profile_rows = await self._request(
+            "PATCH",
+            "/rest/v1/profiles",
+            params={"id": f"eq.{profile['id']}"},
+            json=profile_payload,
+            prefer="return=representation",
+        )
+        updated_profile = updated_profile_rows[0] if updated_profile_rows else {
+            **profile,
+            **profile_payload,
+        }
+
+        if image_path is not _UNSET:
+            await self._delete_replaced_nutritionist_images(
+                nutritionist,
+                keep_path=image_path if isinstance(image_path, str) else None,
+            )
+
+        return {
+            "nutritionist": updated_nutritionist,
+            "profile": updated_profile,
+        }
+
+    async def _upload_nutritionist_image(
+        self,
+        nutritionist_id: str,
+        image: UploadFile,
+    ) -> dict[str, str]:
+        mime_type = (image.content_type or "").lower()
+        extension = NUTRITIONIST_IMAGE_MIME_TYPES.get(mime_type)
+        if not extension:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Envie uma imagem válida nos formatos PNG, JPG, JPEG ou WEBP.",
+            )
+
+        content = await image.read()
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selecione uma imagem antes de salvar.",
+            )
+        if len(content) > MAX_NUTRITIONIST_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="A imagem deve ter no máximo 5 MB.",
+            )
+        if not self._looks_like_allowed_image(content, mime_type):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Envie uma imagem válida nos formatos PNG, JPG, JPEG ou WEBP.",
+            )
+
+        timestamp = int(datetime.now(UTC).timestamp())
+        path = f"{nutritionist_id}/profile-{timestamp}-{uuid.uuid4().hex[:8]}.{extension}"
+
+        await self._storage_request(
+            "POST",
+            f"/storage/v1/object/nutritionist-avatars/{path}",
+            content=content,
+            headers={"Content-Type": mime_type, "x-upsert": "false"},
+        )
+        return {
+            "path": path,
+            "public_url": self._public_storage_url("nutritionist-avatars", path),
+        }
+
+    def _public_storage_url(self, bucket: str, path: str) -> str:
+        base_url = (settings.supabase_public_url or self.supabase_url).rstrip("/")
+        return f"{base_url}/storage/v1/object/public/{bucket}/{path}"
+
+    async def _delete_replaced_nutritionist_images(
+        self,
+        nutritionist: dict,
+        *,
+        keep_path: str | None,
+    ) -> None:
+        paths = {
+            path
+            for key in ("avatar_path", "logo_path", "avatar_url", "logo_url")
+            if (path := self._nutritionist_image_path(nutritionist.get(key)))
+        }
+        if keep_path:
+            paths.discard(keep_path)
+
+        for path in paths:
+            try:
+                await self._storage_request(
+                    "DELETE",
+                    f"/storage/v1/object/nutritionist-avatars/{path}",
+                )
+            except HTTPException:
+                continue
+
+    def _nutritionist_image_path(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+
+        bucket_prefix = "nutritionist-avatars/"
+        if normalized.startswith(bucket_prefix):
+            return normalized[len(bucket_prefix):].split("?", 1)[0]
+
+        storage_marker = "/nutritionist-avatars/"
+        if storage_marker in normalized:
+            return normalized.split(storage_marker, 1)[1].split("?", 1)[0]
+
+        if normalized.startswith("http://") or normalized.startswith("https://"):
+            return None
+
+        return normalized.split("?", 1)[0]
+
+    def _looks_like_allowed_image(self, content: bytes, mime_type: str) -> bool:
+        if mime_type in {"image/jpeg", "image/jpg"}:
+            return content.startswith(b"\xff\xd8\xff")
+        if mime_type == "image/png":
+            return content.startswith(b"\x89PNG\r\n\x1a\n")
+        if mime_type == "image/webp":
+            return content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+        return False
+
+    def _nullable_text(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        return normalized or None
+
+    def _nullable_multiline_text(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = "\n".join(line.strip() for line in value.strip().splitlines())
+        return normalized or None
 
     async def get_nutritionist_dashboard(self, token: str) -> dict:
         profile = await self.get_authenticated_profile(token)
@@ -309,6 +559,7 @@ class SupabaseWorkspaceService:
 
         return {
             "nutritionist": nutritionist,
+            "profile": profile,
             "stats": {
                 "active_patients": len(active_patients),
                 "appointments_today": len(appointments_today),
@@ -487,7 +738,6 @@ class SupabaseWorkspaceService:
             diet["meals"] = meals.get(diet["id"], [])
         for workout in workouts:
             workout["exercises"] = exercises.get(workout["id"], [])
-        imports = await self._attach_import_files(imports)
 
         return {
             "patient": {
@@ -696,6 +946,54 @@ class SupabaseWorkspaceService:
         profile_row = await self.get_profile(patient["user_id"])
         return {**patient, "profile": profile_row}
 
+    async def get_patient_record_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+    ) -> dict:
+        patient = await self._get_patient(patient_id)
+        if patient["nutritionist_id"] != nutritionist_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Paciente fora do seu workspace.",
+            )
+        return patient
+
+    async def update_patient_record_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        payload: dict,
+    ) -> dict:
+        patient = await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        allowed_fields = {
+            "birth_date",
+            "gender",
+            "objective",
+            "notes",
+        }
+        patient_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in allowed_fields
+        }
+        if not patient_payload:
+            return patient
+
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/patients",
+            params={"id": f"eq.{patient_id}", "select": "*"},
+            json=patient_payload,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else {**patient, **patient_payload}
+
     async def update_my_patient_profile(
         self,
         token: str,
@@ -755,6 +1053,79 @@ class SupabaseWorkspaceService:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def list_conversation_memories(
+        self,
+        *,
+        conversation_ids: list[str],
+        chat_type: str,
+        user_id: str,
+        patient_id: str | None,
+        nutritionist_id: str | None,
+    ) -> list[dict]:
+        if not conversation_ids:
+            return []
+
+        params = {
+            "conversation_id": f"in.({','.join(conversation_ids)})",
+            "chat_type": f"eq.{chat_type}",
+            "user_id": f"eq.{user_id}",
+            "select": "*",
+            "order": "last_message_at.desc,updated_at.desc",
+        }
+        params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
+        params["nutritionist_id"] = (
+            f"eq.{nutritionist_id}" if nutritionist_id else "is.null"
+        )
+
+        return await self._request(
+            "GET",
+            "/rest/v1/ai_conversation_memories",
+            params=params,
+        )
+
+    async def upsert_conversation_memory(self, payload: dict) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/ai_conversation_memories",
+            json=payload,
+            params={"on_conflict": "conversation_id,user_id,chat_type"},
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return rows[0]
+
+    async def list_ai_action_logs_for_context(
+        self,
+        *,
+        chat_scope: str,
+        user_id: str,
+        patient_id: str | None,
+        nutritionist_id: str | None,
+        conversation_id: str | None = None,
+        limit: int = 12,
+    ) -> list[dict]:
+        params = {
+            "chat_scope": f"eq.{chat_scope}",
+            "user_id": f"eq.{user_id}",
+            "select": (
+                "id,conversation_id,patient_id,nutritionist_id,tool_name,intent,"
+                "status,success,requires_confirmation,result,error_message,created_at"
+            ),
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
+        params["nutritionist_id"] = (
+            f"eq.{nutritionist_id}" if nutritionist_id else "is.null"
+        )
+        if conversation_id:
+            params["conversation_id"] = f"eq.{conversation_id}"
+
+        return await self._request(
+            "GET",
+            "/rest/v1/ai_action_logs",
+            params=params,
+        )
 
     async def get_ai_conversation_state(
         self,
@@ -1228,6 +1599,8 @@ class SupabaseWorkspaceService:
         self,
         nutritionist_id: str,
         patient_id: str | None,
+        *,
+        limit: int | None = None,
     ) -> list[dict]:
         params = {
             "nutritionist_id": f"eq.{nutritionist_id}",
@@ -1235,6 +1608,8 @@ class SupabaseWorkspaceService:
             "order": "updated_at.desc,created_at.desc",
         }
         params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
+        if limit:
+            params["limit"] = str(limit)
 
         return await self._request(
             "GET",
@@ -1242,15 +1617,24 @@ class SupabaseWorkspaceService:
             params=params,
         )
 
-    async def list_patient_chats_for_patient(self, patient_id: str) -> list[dict]:
+    async def list_patient_chats_for_patient(
+        self,
+        patient_id: str,
+        *,
+        limit: int | None = None,
+    ) -> list[dict]:
+        params = {
+            "patient_id": f"eq.{patient_id}",
+            "select": "*",
+            "order": "updated_at.desc,created_at.desc",
+        }
+        if limit:
+            params["limit"] = str(limit)
+
         return await self._request(
             "GET",
             "/rest/v1/patient_chats",
-            params={
-                "patient_id": f"eq.{patient_id}",
-                "select": "*",
-                "order": "updated_at.desc,created_at.desc",
-            },
+            params=params,
         )
 
     async def list_authorized_nutritionist_chats(
@@ -1358,7 +1742,7 @@ class SupabaseWorkspaceService:
         chat_id: str,
         *,
         nutritionist_id: str,
-        patient_id: str | None = None,
+        patient_id: str | None | object = _UNSET,
     ) -> dict:
         params = {
             "id": f"eq.{chat_id}",
@@ -1366,7 +1750,8 @@ class SupabaseWorkspaceService:
             "select": "*",
             "limit": "1",
         }
-        params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
+        if patient_id is not _UNSET:
+            params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
 
         rows = await self._request(
             "GET",
@@ -1542,6 +1927,27 @@ class SupabaseWorkspaceService:
                 "order": "created_at.asc",
                 "limit": str(limit),
                 "offset": str(offset),
+            },
+        )
+
+    async def list_recent_messages_for_chats(
+        self,
+        *,
+        table: str,
+        chat_ids: list[str],
+        limit: int = 120,
+    ) -> list[dict]:
+        if not chat_ids:
+            return []
+
+        return await self._request(
+            "GET",
+            f"/rest/v1/{table}",
+            params={
+                "chat_id": f"in.({','.join(chat_ids)})",
+                "select": "id,chat_id,sender,content,metadata,created_at",
+                "order": "created_at.desc",
+                "limit": str(limit),
             },
         )
 

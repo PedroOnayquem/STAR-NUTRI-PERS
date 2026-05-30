@@ -73,6 +73,15 @@ export async function sendChatMessageStream({
   onSession?: (sessionId: string) => void
   onDone: (payload: unknown) => void
 }) {
+  if (import.meta.env.DEV) {
+    console.debug('Enviando mensagem para o Chat IA:', {
+      contentLength: content.length,
+      patientId,
+      scope,
+      sessionId,
+    })
+  }
+
   const response = await fetch(`${requireApiBaseUrl()}${chatBasePath(scope)}/send`, {
     method: 'POST',
     headers: authHeaders(session),
@@ -88,7 +97,7 @@ export async function sendChatMessageStream({
 
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null)
-    throw new Error(sanitizeUserMessage(body?.detail, 'Não foi possível conversar com a IA.'))
+    throw new Error(chatFriendlyError(body?.detail, response.status))
   }
 
   const reader = response.body.getReader()
@@ -127,7 +136,7 @@ export async function sendChatMessageStream({
         onAction?.(payload)
       }
       if (event === 'error') {
-        const message = sanitizeUserMessage(payload.detail, 'Não foi possível conversar com a IA.')
+        const message = chatFriendlyError(payload.detail)
         onError?.(message)
         throw new Error(message)
       }
@@ -136,4 +145,22 @@ export async function sendChatMessageStream({
       }
     }
   }
+}
+
+function chatFriendlyError(message: string | null | undefined, status?: number) {
+  const text = message?.trim() ?? ''
+
+  if (status === 404 || /conversa .*nao encontrada|conversa .*não encontrada/i.test(text)) {
+    return 'Não encontrei esta conversa. Crie uma nova conversa e tente novamente.'
+  }
+
+  if (status === 502) {
+    return 'Não foi possível conectar ao serviço de IA agora. Tente novamente em instantes.'
+  }
+
+  if (/paciente .*foco|patient_id|selecione.*paciente/i.test(text)) {
+    return 'Selecione um paciente antes de enviar uma mensagem.'
+  }
+
+  return sanitizeUserMessage(text, 'Não foi possível conversar com a IA.')
 }

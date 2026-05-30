@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from fastapi import HTTPException, status
@@ -153,3 +154,79 @@ class OpenAIChatService:
 
         body = response.json()
         return body.get("choices", [{}])[0].get("message", {})
+
+    async def complete_json(
+        self,
+        *,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        reasoning_level: str = "low",
+        max_tokens: int = 700,
+    ) -> dict:
+        generation = GENERATION_SETTINGS.get(
+            reasoning_level,
+            GENERATION_SETTINGS["low"],
+        )
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "developer", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(user_payload, ensure_ascii=False, default=str),
+                },
+            ],
+            "temperature": 0,
+            "max_completion_tokens": min(generation["max_tokens"], max_tokens),
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=45) as client:
+                response = await client.post(
+                    self.base_url,
+                    headers=headers,
+                    json=payload,
+                )
+        except httpx.RequestError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Nao foi possivel conectar a OpenAI.",
+            ) from None
+
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"OpenAI rejeitou a requisicao: {response.text}",
+            )
+
+        content = (
+            response.json()
+            .get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        return _parse_json_object(content)
+
+
+def _parse_json_object(content: str) -> dict:
+    try:
+        parsed = json.loads(content)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+
+    start = content.find("{")
+    end = content.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+
+    try:
+        parsed = json.loads(content[start : end + 1])
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

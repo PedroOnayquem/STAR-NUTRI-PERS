@@ -21,6 +21,7 @@ AUTO_TOOLS = {
     "register_injury",
     "register_progress",
     "register_weight_change",
+    "update_patient_birth_date",
 }
 
 NUTRITIONIST_TOOLS = AUTO_TOOLS | {"request_confirmation"}
@@ -31,6 +32,7 @@ PATIENT_TOOLS = {
     "register_weight_change",
     "request_confirmation",
 }
+PENDING_TOOLS = {"add_workout_observation", "update_patient_birth_date"}
 
 
 class AiAgentService:
@@ -71,6 +73,26 @@ class AiAgentService:
         )
         if pending_resolution:
             tool_name, arguments = pending_resolution
+            if tool_name not in allowed_tools:
+                if pending_state:
+                    await self.workspace.clear_ai_conversation_state(pending_state["id"])
+                return [
+                    await self._record_action(
+                        actor=profile,
+                        arguments={
+                            "message": user_message,
+                            "pending_action": tool_name,
+                        },
+                        chat=chat,
+                        chat_scope=chat_scope,
+                        context=context,
+                        error="A acao pendente nao esta disponivel neste tipo de chat.",
+                        intent="confirm_pending_action",
+                        message=user_message_record,
+                        status="skipped",
+                        tool_name="conversation_state",
+                    )
+                ]
             return [
                 await self._execute_tool(
                     actor=profile,
@@ -101,6 +123,32 @@ class AiAgentService:
                         result={
                             "label": "Acao pendente cancelada",
                             "summary": "A confirmacao pendente foi cancelada.",
+                        },
+                        status="skipped",
+                        tool_name="conversation_state",
+                    )
+                ]
+            if pending_state and intent == "confirm_pending_action":
+                await self.workspace.clear_ai_conversation_state(pending_state["id"])
+                return [
+                    await self._record_action(
+                        actor=profile,
+                        arguments={
+                            "message": user_message,
+                            "pending_action": pending_state.get("pending_action"),
+                        },
+                        chat=chat,
+                        chat_scope=chat_scope,
+                        context=context,
+                        error="A acao pendente nao esta mais disponivel para execucao.",
+                        intent=intent,
+                        message=user_message_record,
+                        result={
+                            "label": "Acao pendente indisponivel",
+                            "summary": (
+                                "Nao consegui executar a acao pendente. "
+                                "Envie o pedido novamente com os dados necessarios."
+                            ),
                         },
                         status="skipped",
                         tool_name="conversation_state",
@@ -234,6 +282,7 @@ class AiAgentService:
             "paciente_em_foco": {
                 "id": patient.get("id"),
                 "nome": patient_profile.get("full_name"),
+                "data_nascimento": patient.get("birth_date"),
                 "objetivo": patient.get("objective"),
             },
             "dieta_ativa": active_diet,
@@ -256,10 +305,16 @@ class AiAgentService:
             "Para register_injury, extraia JSON estruturado. Nunca use a mensagem bruta do usuario "
             "como local, description, notes ou title. O texto do usuario serve apenas para inferir "
             "local, descricao clinica curta, gravidade, origem, data e observacoes.\n"
+            "Correcoes simples e reversiveis de cadastro, como data de nascimento claramente informada, "
+            "devem chamar update_patient_birth_date diretamente. Para frases como 'nasceu em 98', "
+            "use o dia e mes da data de nascimento atual do paciente em foco, se existir; se nao existir, "
+            "nao invente dia/mes e nao execute a alteracao.\n"
             "Use sempre o paciente em foco; não altere dados de outro paciente citado por engano.\n"
             "Não invente valores, horários, macros ou medidas ausentes.\n"
             "Ações de deletar, cancelar, remover, sobrescrever plano completo ou apagar dados "
-            "devem usar request_confirmation, nunca execução direta.\n"
+            "devem usar request_confirmation com pending_action e pending_payload executaveis, nunca execução direta.\n"
+            "Depois de pedir confirmacao uma vez, a proxima confirmacao curta deve executar a pending_action; "
+            "nunca peca a mesma confirmacao novamente.\n"
             "Se a mensagem for pergunta, conversa geral ou ambígua, não chame nenhuma tool.\n\n"
             "Contexto operacional:\n"
             f"{json.dumps(summary, ensure_ascii=False, default=str)}"
@@ -313,7 +368,7 @@ class AiAgentService:
         arguments = {**arguments, "_intent": intent}
         try:
             if tool_name == "request_confirmation":
-                return await self._record_action(
+                return await self._request_confirmation(
                     actor=actor,
                     arguments=arguments,
                     chat=chat,
@@ -321,15 +376,6 @@ class AiAgentService:
                     context=context,
                     intent=intent,
                     message=message,
-                    requires_confirmation=True,
-                    result={
-                        "label": "Confirmacao necessaria",
-                        "summary": arguments.get("question")
-                        or arguments.get("action_description")
-                        or "A acao precisa de confirmacao antes de executar.",
-                    },
-                    status="pending_confirmation",
-                    tool_name=tool_name,
                 )
             if tool_name == "register_injury":
                 return await self._register_injury(
@@ -423,6 +469,16 @@ class AiAgentService:
                     intent=intent,
                     message=message,
                 )
+            if tool_name == "update_patient_birth_date":
+                return await self._update_patient_birth_date(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
         except Exception as exc:
             return await self._record_action(
                 actor=actor,
@@ -448,6 +504,301 @@ class AiAgentService:
             message=message,
             status="skipped",
             tool_name=tool_name,
+        )
+
+    async def _request_confirmation(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        pending_action = _optional_text(
+            arguments.get("pending_action") or arguments.get("tool_name")
+        )
+        pending_payload = _object_payload(
+            arguments.get("pending_payload") or arguments.get("payload")
+        )
+        if not pending_action or pending_action not in PENDING_TOOLS:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Confirmacao sem acao executavel.",
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Confirmacao sem acao executavel",
+                    "summary": (
+                        "Nao consegui preparar a acao para confirmacao. "
+                        "Envie o pedido novamente com os dados necessarios."
+                    ),
+                },
+                status="skipped",
+                tool_name="request_confirmation",
+            )
+
+        allowed_pending = (
+            NUTRITIONIST_TOOLS if chat_scope == "nutritionist" else PATIENT_TOOLS
+        )
+        if pending_action not in allowed_pending:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Acao pendente nao permitida neste chat.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="request_confirmation",
+            )
+
+        pending_payload = {**pending_payload}
+        pending_payload.setdefault("patient_id", self._patient_id(context))
+        if self._patient_id_mismatch(context, pending_payload.get("patient_id")):
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="ID do paciente nao corresponde ao paciente em foco.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="request_confirmation",
+            )
+        if self._patient_name_mismatch(context, pending_payload.get("patient_name")):
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Nome citado nao corresponde ao paciente em foco.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="request_confirmation",
+            )
+
+        state = await self.workspace.upsert_ai_conversation_state(
+            {
+                "conversation_id": chat["id"],
+                "user_id": actor["id"],
+                "patient_id": self._patient_id(context),
+                "pending_action": pending_action,
+                "target_entity": arguments.get("target_entity"),
+                "pending_payload": pending_payload,
+                "expires_at": (_sao_paulo_now() + timedelta(minutes=30)).isoformat(),
+            }
+        )
+        question = (
+            _optional_text(arguments.get("question"))
+            or _optional_text(arguments.get("action_description"))
+            or "Confirma a execucao desta acao?"
+        )
+        return await self._record_action(
+            actor=actor,
+            arguments={
+                **arguments,
+                "pending_action": pending_action,
+                "pending_payload": pending_payload,
+            },
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            requires_confirmation=True,
+            result={
+                "label": "Confirmacao necessaria",
+                "pending_action": pending_action,
+                "state_id": state.get("id"),
+                "summary": question,
+            },
+            status="pending_confirmation",
+            tool_name="request_confirmation",
+        )
+
+    async def _update_patient_birth_date(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        if chat_scope != "nutritionist":
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Apenas nutricionistas podem alterar a data de nascimento do paciente.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="update_patient_birth_date",
+            )
+
+        patient_id = self._patient_id(context)
+        nutritionist = context.get("nutritionist") or {}
+        nutritionist_id = _optional_text(nutritionist.get("id"))
+        if not nutritionist_id:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Nutricionista nao identificado para atualizar o paciente.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="update_patient_birth_date",
+            )
+
+        birth_date = _safe_birth_date(arguments.get("birth_date"))
+        birth_year = _birth_year(arguments.get("birth_year"))
+        if not birth_date and birth_year:
+            current_birth_date = _safe_birth_date(
+                (context.get("patient") or {}).get("birth_date")
+            )
+            if current_birth_date:
+                current_date = datetime.fromisoformat(current_birth_date).date()
+                birth_date = _compose_birth_date(
+                    birth_year,
+                    current_date.month,
+                    current_date.day,
+                )
+            else:
+                await self.workspace.upsert_ai_conversation_state(
+                    {
+                        "conversation_id": chat["id"],
+                        "user_id": actor["id"],
+                        "patient_id": patient_id,
+                        "pending_action": "update_patient_birth_date",
+                        "target_entity": "patient_birth_date",
+                        "pending_payload": {
+                            "birth_year": birth_year,
+                            "needs_day_month": True,
+                            "patient_id": patient_id,
+                        },
+                        "expires_at": (
+                            _sao_paulo_now() + timedelta(minutes=30)
+                        ).isoformat(),
+                    }
+                )
+                return await self._record_action(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                    requires_confirmation=True,
+                    result={
+                        "label": "Data de nascimento incompleta",
+                        "summary": (
+                            f"Encontrei o ano {birth_year}, mas preciso do dia e do mes "
+                            "para atualizar a data de nascimento."
+                        ),
+                    },
+                    status="pending_confirmation",
+                    tool_name="update_patient_birth_date",
+                )
+
+        if not birth_date:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Data de nascimento ausente ou invalida.",
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Data de nascimento invalida",
+                    "summary": (
+                        "Informe uma data de nascimento completa, por exemplo 14/08/1998."
+                    ),
+                },
+                status="skipped",
+                tool_name="update_patient_birth_date",
+            )
+
+        before = await self.workspace.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        previous_birth_date = _safe_birth_date(before.get("birth_date"))
+        state_id = _optional_text(arguments.get("_state_id"))
+        if previous_birth_date == birth_date:
+            if state_id:
+                await self.workspace.clear_ai_conversation_state(state_id)
+            return await self._record_action(
+                actor=actor,
+                arguments={**arguments, "birth_date": birth_date},
+                before_state=before,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Data de nascimento ja estava correta",
+                    "summary": f"A data de nascimento ja estava como {_format_date_br(birth_date)}.",
+                },
+                status="skipped",
+                tool_name="update_patient_birth_date",
+            )
+
+        updated = await self.workspace.update_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+            payload={"birth_date": birth_date},
+        )
+        if state_id:
+            await self.workspace.clear_ai_conversation_state(state_id)
+
+        return await self._record_action(
+            actor=actor,
+            after_state=updated,
+            arguments={**arguments, "birth_date": birth_date, "patient_id": patient_id},
+            before_state=before,
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            new_value={"birth_date": birth_date},
+            old_value={"birth_date": previous_birth_date},
+            result={
+                "label": "Data de nascimento atualizada",
+                "old_birth_date": previous_birth_date,
+                "new_birth_date": birth_date,
+                "summary": (
+                    "Data de nascimento atualizada para "
+                    f"{_format_date_br(birth_date)}."
+                ),
+            },
+            status="executed",
+            tool_name="update_patient_birth_date",
         )
 
     async def _register_injury(
@@ -1237,6 +1588,8 @@ class AiAgentService:
         before_state: Any = None,
         error: str | None = None,
         intent: str | None = None,
+        new_value: Any = None,
+        old_value: Any = None,
         requires_confirmation: bool = False,
         result: dict | None = None,
     ) -> dict:
@@ -1247,31 +1600,35 @@ class AiAgentService:
         }
         resolved_intent = intent or str(arguments.get("_intent") or tool_name)
         success = status == "executed"
-        log = await self.workspace.insert_ai_action_log(
-            {
-                "actor_user_id": actor["id"],
-                "user_id": actor["id"],
-                "actor_role": actor["role"],
-                "patient_id": self._patient_id(context),
-                "nutritionist_id": (context.get("nutritionist") or {}).get("id"),
-                "chat_scope": chat_scope,
-                "chat_id": chat["id"],
-                "conversation_id": chat["id"],
-                "message_id": message["id"],
-                "tool_name": tool_name,
-                "intent": resolved_intent,
-                "status": status,
-                "success": success,
-                "requires_confirmation": requires_confirmation,
-                "input": clean_arguments,
-                "payload": clean_arguments,
-                "result": result or {},
-                "before_state": before_state,
-                "after_state": after_state,
-                "error": error,
-                "error_message": error,
-            }
-        )
+        log_payload = {
+            "actor_user_id": actor["id"],
+            "user_id": actor["id"],
+            "actor_role": actor["role"],
+            "patient_id": self._patient_id(context),
+            "nutritionist_id": (context.get("nutritionist") or {}).get("id"),
+            "chat_scope": chat_scope,
+            "chat_id": chat["id"],
+            "conversation_id": chat["id"],
+            "message_id": message["id"],
+            "tool_name": tool_name,
+            "intent": resolved_intent,
+            "status": status,
+            "success": success,
+            "requires_confirmation": requires_confirmation,
+            "input": clean_arguments,
+            "payload": clean_arguments,
+            "result": result or {},
+            "before_state": before_state,
+            "after_state": after_state,
+            "error": error,
+            "error_message": error,
+        }
+        if old_value is not None:
+            log_payload["old_value"] = old_value
+        if new_value is not None:
+            log_payload["new_value"] = new_value
+
+        log = await self.workspace.insert_ai_action_log(log_payload)
         return {
             "error": error,
             "intent": resolved_intent,
@@ -1312,6 +1669,8 @@ class AiAgentService:
             return "confirm_pending_action" if has_pending_state else "answer_question"
         if _is_cancellation_message(normalized):
             return "cancel_pending_action" if has_pending_state else "answer_question"
+        if self._looks_like_birth_date_update(normalized):
+            return "update_patient_birth_date"
         if any(
             term in normalized
             for term in (
@@ -1354,16 +1713,27 @@ class AiAgentService:
         normalized = _normalize(user_message)
         if _is_cancellation_message(normalized):
             return None
-        if not _is_confirmation_message(normalized):
-            return None
 
         pending_action = pending_state.get("pending_action")
         payload = dict(pending_state.get("pending_payload") or {})
         payload["_state_id"] = pending_state["id"]
         payload["patient_id"] = pending_state.get("patient_id")
 
-        if pending_action == "add_workout_observation":
-            return "add_workout_observation", payload
+        if pending_action == "update_patient_birth_date" and payload.get("needs_day_month"):
+            birth_date = _birth_date_from_day_month_year(
+                user_message,
+                payload.get("birth_year"),
+            )
+            if birth_date:
+                payload.pop("needs_day_month", None)
+                payload["birth_date"] = birth_date
+                return "update_patient_birth_date", payload
+
+        if not _is_confirmation_message(normalized):
+            return None
+
+        if pending_action in PENDING_TOOLS:
+            return str(pending_action), payload
         return None
 
     def _normalize_training_plan_payload(self, arguments: dict, context: dict) -> dict:
@@ -1500,6 +1870,15 @@ class AiAgentService:
         ):
             return "add_food_to_meal", food
 
+        birth_date = self._fallback_birth_date(raw, normalized, context)
+        if (
+            intent == "update_patient_birth_date"
+            and chat_scope == "nutritionist"
+            and birth_date
+            and "update_patient_birth_date" in allowed_tools
+        ):
+            return "update_patient_birth_date", birth_date
+
         return None
 
     def _looks_actionable(self, user_message: str) -> bool:
@@ -1514,6 +1893,9 @@ class AiAgentService:
                 "cadastrar",
                 "cadastre",
                 "cancelar",
+                "corrige",
+                "corrigir",
+                "corrija",
                 "criar",
                 "deletar",
                 "engordei",
@@ -1647,6 +2029,86 @@ class AiAgentService:
             "patient_name": self._extract_patient_name(context, normalized),
             "quantity": match.group("quantity"),
         }
+
+    def _fallback_birth_date(
+        self,
+        raw: str,
+        normalized: str,
+        context: dict,
+    ) -> dict | None:
+        if not self._looks_like_birth_date_update(normalized):
+            return None
+
+        full_date = _extract_birth_date(raw)
+        if full_date:
+            return {
+                "birth_date": full_date,
+                "patient_id": self._patient_id(context),
+                "patient_name": self._extract_patient_name(context, normalized),
+            }
+
+        birth_year = _extract_birth_year(normalized)
+        if birth_year is None:
+            return None
+
+        current_birth_date = _safe_birth_date((context.get("patient") or {}).get("birth_date"))
+        if current_birth_date:
+            current_date = datetime.fromisoformat(current_birth_date).date()
+            birth_date = _compose_birth_date(
+                birth_year,
+                current_date.month,
+                current_date.day,
+            )
+            if birth_date:
+                return {
+                    "birth_date": birth_date,
+                    "birth_year": birth_year,
+                    "patient_id": self._patient_id(context),
+                    "patient_name": self._extract_patient_name(context, normalized),
+                }
+
+        return {
+            "birth_year": birth_year,
+            "patient_id": self._patient_id(context),
+            "patient_name": self._extract_patient_name(context, normalized),
+        }
+
+    def _looks_like_birth_date_update(self, normalized: str) -> bool:
+        has_birth_term = any(
+            term in normalized
+            for term in (
+                "data de nascimento",
+                "nascimento",
+                "nasceu",
+                "nascido",
+                "nascida",
+                "birth date",
+                "born date",
+                "dob",
+            )
+        )
+        if not has_birth_term:
+            return False
+
+        has_write_intent = any(
+            term in normalized
+            for term in (
+                "alter",
+                "atualiz",
+                "corrig",
+                "editar",
+                "mudar",
+                "trocar",
+                "ajust",
+                "definir",
+                "na verdade",
+            )
+        )
+        has_inline_birth_value = bool(
+            re.search(r"\b(?:nasceu|nascido|nascida)\s+(?:em|no dia|na data)?\s*\d", normalized)
+            or (has_birth_term and re.search(r"\d{1,4}[./-]\d{1,2}", normalized))
+        )
+        return has_write_intent or has_inline_birth_value
 
     def _extract_body_part(self, normalized: str) -> str | None:
         known_parts = (
@@ -1830,6 +2292,18 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def _object_payload(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _format_number(value: float) -> str:
     if value.is_integer():
         return str(int(value))
@@ -1975,6 +2449,129 @@ def _safe_date(value: str) -> str:
         return _sao_paulo_today()
 
 
+def _safe_birth_date(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return _extract_birth_date(text)
+
+    if parsed.year < 1900 or parsed > _sao_paulo_now().date():
+        return None
+    return parsed.isoformat()
+
+
+def _extract_birth_date(value: str) -> str | None:
+    text = str(value).strip()
+
+    iso_match = re.search(
+        r"\b(?P<year>\d{4})[-/](?P<month>\d{1,2})[-/](?P<day>\d{1,2})\b",
+        text,
+    )
+    if iso_match:
+        return _compose_birth_date(
+            _birth_year(iso_match.group("year")),
+            int(iso_match.group("month")),
+            int(iso_match.group("day")),
+        )
+
+    br_match = re.search(
+        r"\b(?P<day>\d{1,2})[./-](?P<month>\d{1,2})[./-](?P<year>\d{2,4})\b",
+        text,
+    )
+    if br_match:
+        return _compose_birth_date(
+            _birth_year(br_match.group("year")),
+            int(br_match.group("month")),
+            int(br_match.group("day")),
+        )
+
+    return None
+
+
+def _extract_birth_year(normalized: str) -> int | None:
+    patterns = (
+        r"\b(?:nasceu|nascido|nascida)\s+(?:em|no ano de|ano de|no ano)?\s*(\d{2,4})\b",
+        r"\b(?:nascimento|data de nascimento|dob|birth date|born date).*?(\d{2,4})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if match:
+            year = _birth_year(match.group(1))
+            if year:
+                return year
+    return None
+
+
+def _birth_year(value: Any) -> int | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not re.fullmatch(r"\d{2,4}", text):
+        return None
+
+    year = int(text)
+    current_year = _sao_paulo_now().year
+    if len(text) <= 2:
+        year = 2000 + year
+        if year > current_year:
+            year -= 100
+
+    if year < 1900 or year > current_year:
+        return None
+    return year
+
+
+def _compose_birth_date(year: int | None, month: int, day: int) -> str | None:
+    if not year:
+        return None
+    try:
+        candidate = datetime(year, month, day).date()
+    except ValueError:
+        return None
+    if candidate.year < 1900 or candidate > _sao_paulo_now().date():
+        return None
+    return candidate.isoformat()
+
+
+def _birth_date_from_day_month_year(value: str, birth_year: Any) -> str | None:
+    full_date = _extract_birth_date(value)
+    if full_date:
+        return full_date
+
+    year = _birth_year(birth_year)
+    if not year:
+        return None
+
+    match = re.search(
+        r"\b(?P<day>\d{1,2})[./-](?P<month>\d{1,2})(?:[./-]\d{2,4})?\b",
+        str(value),
+    )
+    if not match:
+        return None
+
+    return _compose_birth_date(
+        year,
+        int(match.group("month")),
+        int(match.group("day")),
+    )
+
+
+def _format_date_br(value: str) -> str:
+    parsed = _safe_birth_date(value)
+    if not parsed:
+        return str(value)
+    date_value = datetime.fromisoformat(parsed).date()
+    return date_value.strftime("%d/%m/%Y")
+
+
 def _sao_paulo_now() -> datetime:
     try:
         return datetime.now(ZoneInfo("America/Sao_Paulo"))
@@ -2100,6 +2697,32 @@ AGENT_TOOLS = [
                     "fats_g": {"type": "number"},
                 },
                 "required": ["meal_name", "food_name", "quantity"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_patient_birth_date",
+            "description": (
+                "Atualiza a data de nascimento do paciente em foco quando a nova data "
+                "estiver claramente informada. Para ano abreviado, como 'nasceu em 98', "
+                "use o dia e mes atuais do cadastro se existirem e converta para YYYY-MM-DD."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "birth_date": {
+                        "description": "Data completa no formato YYYY-MM-DD.",
+                        "type": "string",
+                    },
+                    "birth_year": {
+                        "description": "Ano de nascimento quando apenas o ano foi informado.",
+                        "type": "integer",
+                    },
+                    "patient_id": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                },
             },
         },
     },
@@ -2236,10 +2859,19 @@ AGENT_TOOLS = [
                 "type": "object",
                 "properties": {
                     "action_description": {"type": "string"},
+                    "pending_action": {
+                        "description": "Nome da ferramenta real que sera executada apos confirmacao.",
+                        "type": "string",
+                    },
+                    "pending_payload": {
+                        "description": "Argumentos completos para executar a ferramenta real apos confirmacao.",
+                        "type": "object",
+                    },
                     "question": {"type": "string"},
                     "risk": {"type": "string"},
+                    "target_entity": {"type": "string"},
                 },
-                "required": ["action_description", "question"],
+                "required": ["action_description", "pending_action", "pending_payload", "question"],
             },
         },
     },

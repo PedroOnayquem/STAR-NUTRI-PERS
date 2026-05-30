@@ -24,6 +24,7 @@ const NutritionistChatPage = lazy(() => import('./pages/nutritionist/Nutritionis
 const NutritionistDashboardPage = lazy(() => import('./pages/nutritionist/NutritionistDashboardPage').then((module) => ({ default: module.NutritionistDashboardPage })))
 const PatientDetailPage = lazy(() => import('./pages/nutritionist/PatientDetailPage').then((module) => ({ default: module.PatientDetailPage })))
 const PatientsPage = lazy(() => import('./pages/nutritionist/PatientsPage').then((module) => ({ default: module.PatientsPage })))
+const NutritionistProfilePage = lazy(() => import('./pages/nutritionist/NutritionistProfilePage').then((module) => ({ default: module.NutritionistProfilePage })))
 const PatientWorkspacePage = lazy(() => import('./pages/patient/PatientWorkspacePage').then((module) => ({ default: module.PatientWorkspacePage })))
 const ProfileMissingPage = lazy(() => import('./features/auth/pages/ProfileMissingPage').then((module) => ({ default: module.ProfileMissingPage })))
 
@@ -102,6 +103,7 @@ function App() {
                 <Route element={<PatientsPage mode="create" />} path="/nutritionist/patients/new" />
                 <Route element={<PatientDetailPage />} path="/nutritionist/patients/:patientId" />
                 <Route element={<NutritionistChatPage />} path="/nutritionist/chat" />
+                <Route element={<NutritionistProfilePage />} path="/nutritionist/profile" />
               </Route>
             </Route>
 

@@ -15,6 +15,13 @@ export type NutritionistRecord = {
   id: string
   user_id: string
   crn: string | null
+  avatar_path: string | null
+  avatar_url: string | null
+  logo_path: string | null
+  logo_url: string | null
+  clinic_name: string | null
+  professional_name: string | null
+  phone: string | null
   bio: string | null
   specialty: string | null
   created_at?: string | null
@@ -246,6 +253,7 @@ export type PatientContext = {
 
 export type NutritionistWorkspace = {
   nutritionist: NutritionistRecord
+  profile: ProfileSummary
   patients: PatientRecord[]
 }
 
@@ -273,6 +281,7 @@ export type DashboardPatientSummary = {
 
 export type NutritionistDashboard = {
   nutritionist: NutritionistRecord
+  profile: ProfileSummary
   stats: {
     active_patients: number
     appointments_today: number

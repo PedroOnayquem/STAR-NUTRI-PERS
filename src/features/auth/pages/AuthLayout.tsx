@@ -1,5 +1,6 @@
 import { Activity, Bot, Moon, ShieldCheck, Sparkles, Sun } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { Logo } from '../../../components/Logo'
 import { Button } from '../../../components/ui/Button'
 
 export function AuthLayout({
@@ -92,17 +93,7 @@ export function AuthLayout({
 function Brand({ dark = false }: { dark?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400 via-teal-400 to-cyan-400 text-sm font-black text-slate-950 shadow-[0_14px_40px_rgba(16,185,129,0.35)]">
-        SN
-      </div>
-      <div>
-        <p className={`font-black ${dark ? 'text-slate-950 dark:text-white' : 'text-white'}`}>
-          Star Nutri
-        </p>
-        <p className={dark ? 'text-xs text-slate-500 dark:text-slate-400' : 'text-xs text-slate-300'}>
-          Nutrição inteligente
-        </p>
-      </div>
+      <Logo className="h-16 w-auto max-w-[220px]" showText={dark} />
     </div>
   )
 }

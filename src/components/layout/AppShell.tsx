@@ -12,6 +12,7 @@ import {
   Utensils,
 } from 'lucide-react'
 import type { Profile, UserRole } from '../../types'
+import { Logo } from '../Logo'
 import { Button } from '../ui/Button'
 
 type AppShellProps = {
@@ -141,19 +142,10 @@ export function AppShell({
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-600 text-sm font-black text-white">
-        SN
-      </div>
-      {!compact && (
-        <div>
-          <p className="text-base font-black text-slate-950 dark:text-white">
-            Star Nutri
-          </p>
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Nutrição com IA
-          </p>
-        </div>
-      )}
+      <Logo
+        className={compact ? 'h-10 w-auto max-w-[140px]' : 'h-12 w-auto max-w-[180px]'}
+        showText={!compact}
+      />
     </div>
   )
 }
