@@ -12,8 +12,12 @@ export function listChatSessions(
   session: Session | null,
   scope: ChatScope,
   patientId?: string,
+  chatScope?: 'general' | 'patient',
 ) {
-  const search = patientId ? `?patient_id=${encodeURIComponent(patientId)}` : ''
+  const params = new URLSearchParams()
+  if (chatScope) params.set('chat_scope', chatScope)
+  if (patientId) params.set('patient_id', patientId)
+  const search = params.size ? `?${params.toString()}` : ''
   return apiRequest<ChatSessionRecord[]>(
     `${chatBasePath(scope)}/sessions${search}`,
     session,
@@ -23,11 +27,21 @@ export function listChatSessions(
 export function createChatSession(
   session: Session | null,
   scope: ChatScope,
-  payload: { patientId?: string; title?: string },
+  payload: { chatScope?: 'general' | 'patient'; patientId?: string; title?: string },
 ) {
+  if (import.meta.env.DEV) {
+    console.debug('Payload enviado para /api/chat/nutritionist/sessions:', {
+      chat_scope: payload.chatScope,
+      patient_id: payload.patientId,
+      scope,
+      title: payload.title,
+    })
+  }
+
   return apiRequest<ChatSessionRecord>(`${chatBasePath(scope)}/sessions`, session, {
     method: 'POST',
     body: JSON.stringify({
+      chat_scope: payload.chatScope,
       patient_id: payload.patientId,
       title: payload.title,
     }),
@@ -55,6 +69,7 @@ export async function sendChatMessageStream({
   onError,
   onSession,
   onAction,
+  chatScope,
   patientId,
   reasoningLevel,
   scope,
@@ -62,6 +77,7 @@ export async function sendChatMessageStream({
   sessionId,
 }: {
   content: string
+  chatScope?: 'general' | 'patient'
   patientId?: string
   reasoningLevel: AiReasoningLevel
   scope: ChatScope
@@ -76,6 +92,7 @@ export async function sendChatMessageStream({
   if (import.meta.env.DEV) {
     console.debug('Enviando mensagem para o Chat IA:', {
       contentLength: content.length,
+      chatScope,
       patientId,
       scope,
       sessionId,
@@ -87,6 +104,7 @@ export async function sendChatMessageStream({
     headers: authHeaders(session),
     body: JSON.stringify({
       content,
+      chat_scope: chatScope,
       patient_id: patientId,
       reasoning_level: reasoningLevel,
       session_id: sessionId,
@@ -156,6 +174,10 @@ function chatFriendlyError(message: string | null | undefined, status?: number) 
 
   if (status === 502) {
     return 'Não foi possível conectar ao serviço de IA agora. Tente novamente em instantes.'
+  }
+
+  if (status === 400) {
+    return 'Não foi possível iniciar esta conversa. Tente novamente.'
   }
 
   if (/paciente .*foco|patient_id|selecione.*paciente/i.test(text)) {

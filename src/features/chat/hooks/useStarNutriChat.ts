@@ -30,6 +30,9 @@ export function useStarNutriChat({
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessageRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scopedPatientId = scope === 'nutritionist' ? patientId : undefined
+  const nutritionistChatScope = scope === 'nutritionist' && !scopedPatientId
+    ? 'general'
+    : 'patient'
 
   const sessionsQueryKey = useMemo(
     () => [
@@ -47,7 +50,13 @@ export function useStarNutriChat({
 
   const sessionsQuery = useQuery({
     queryKey: sessionsQueryKey,
-    queryFn: () => listChatSessions(session, scope, scopedPatientId),
+    queryFn: () =>
+      listChatSessions(
+        session,
+        scope,
+        scopedPatientId,
+        scope === 'nutritionist' ? nutritionistChatScope : undefined,
+      ),
     enabled: canUseChat,
   })
 
@@ -129,6 +138,7 @@ export function useStarNutriChat({
       }
 
       return createChatSession(session, scope, {
+        chatScope: nutritionistChatScope,
         patientId: scopedPatientId,
         title:
           scope === 'nutritionist' && !scopedPatientId
@@ -157,6 +167,7 @@ export function useStarNutriChat({
       let resolvedSessionId = activeSessionId
       if (!resolvedSessionId) {
         const created = await createChatSession(session, scope, {
+          chatScope: nutritionistChatScope,
           patientId: scopedPatientId,
           title:
             scope === 'nutritionist' && !scopedPatientId
@@ -177,6 +188,7 @@ export function useStarNutriChat({
       })
 
       await sendChatMessageStream({
+        chatScope: nutritionistChatScope,
         content,
         patientId: scopedPatientId,
         reasoningLevel,

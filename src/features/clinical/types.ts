@@ -78,12 +78,46 @@ export type MetricRecord = {
   created_at?: string | null
 }
 
+export type DietMealFood = {
+  calories?: number | null
+  carbohydrate_g?: number | null
+  carbs_g?: number | null
+  energy_kcal?: number | null
+  fats_g?: number | null
+  fiber_g?: number | null
+  lipid_g?: number | null
+  name: string
+  notes?: string
+  protein_g?: number | null
+  quantity: string
+  quantity_g?: number | null
+  sodium_mg?: number | null
+  taco_food_id?: string | null
+}
+
+export type DietMealItemRecord = {
+  carbohydrate_g: number | null
+  created_at?: string | null
+  custom_food_name: string | null
+  energy_kcal: number | null
+  fiber_g: number | null
+  id: string
+  lipid_g: number | null
+  meal_id: string
+  protein_g: number | null
+  quantity_g: number
+  sodium_mg: number | null
+  taco_food_id: string | null
+  updated_at?: string | null
+}
+
 export type DietMealRecord = {
   id: string
   diet_id: string
   meal_name: string
   meal_time: string | null
-  foods: Array<{ name: string; quantity: string; notes?: string }>
+  foods: DietMealFood[]
+  items?: DietMealItemRecord[]
   notes: string | null
 }
 
@@ -131,6 +165,7 @@ export type WorkoutRecord = {
 
 export type ChatSessionRecord = {
   id: string
+  chat_scope?: 'general' | 'patient'
   patient_id: string | null
   nutritionist_id?: string
   title: string | null

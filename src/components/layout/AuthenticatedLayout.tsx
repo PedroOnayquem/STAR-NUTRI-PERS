@@ -2,6 +2,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Activity,
   Bot,
+  BookOpen,
   CalendarDays,
   ChevronRight,
   LayoutDashboard,
@@ -32,6 +33,7 @@ const navByRole = {
   nutritionist: [
     { to: '/nutritionist', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/nutritionist/NutritionistDashboardPage') },
     { to: '/nutritionist/patients', label: 'Pacientes', icon: <Users size={18} />, preload: () => import('../../pages/nutritionist/PatientsPage') },
+    { to: '/nutritionist/taco', label: 'Tabela TACO', icon: <BookOpen size={18} />, preload: () => import('../../pages/nutritionist/TacoPage') },
     { to: '/nutritionist/chat', label: 'Chat IA', icon: <Bot size={18} />, preload: () => import('../../pages/nutritionist/NutritionistChatPage') },
     { to: '/nutritionist/profile', label: 'Perfil', icon: <UserRound size={18} />, preload: () => import('../../pages/nutritionist/NutritionistProfilePage') },
   ],

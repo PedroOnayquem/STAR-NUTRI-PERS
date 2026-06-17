@@ -1,4 +1,6 @@
 import json
+import re
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -21,17 +23,25 @@ async def list_chat_sessions(
     token: str = Depends(get_bearer_token),
 ) -> list[dict]:
     if patient_id:
-        return await list_nutritionist_chat_sessions(patient_id, token)
+        return await list_nutritionist_chat_sessions(patient_id=patient_id, token=token)
     return await list_patient_chat_sessions(token)
 
 
 @router.get("/nutritionist/sessions")
 async def list_nutritionist_chat_sessions(
     patient_id: str | None = None,
+    chat_scope: str | None = None,
     token: str = Depends(get_bearer_token),
 ) -> list[dict]:
-    workspace = SupabaseWorkspaceService()
-    return await workspace.list_authorized_nutritionist_chats(token, patient_id)
+    try:
+        workspace = SupabaseWorkspaceService()
+        return await workspace.list_authorized_nutritionist_chats(
+            token,
+            patient_id,
+            chat_scope=chat_scope,
+        )
+    except Exception as exc:
+        _raise_session_error(exc)
 
 
 @router.get("/patient/sessions")
@@ -57,12 +67,16 @@ async def create_nutritionist_chat_session(
     payload: CreateChatSessionRequest,
     token: str = Depends(get_bearer_token),
 ) -> dict:
-    workspace = SupabaseWorkspaceService()
-    return await workspace.create_authorized_nutritionist_chat(
-        token,
-        payload.patient_id,
-        payload.title,
-    )
+    try:
+        workspace = SupabaseWorkspaceService()
+        return await workspace.create_authorized_nutritionist_chat(
+            token,
+            payload.patient_id,
+            payload.title,
+            chat_scope=payload.chat_scope,
+        )
+    except Exception as exc:
+        _raise_session_error(exc)
 
 
 @router.post("/patient/sessions")
@@ -217,7 +231,7 @@ async def list_legacy_nutritionist_sessions(
     offset: int = 0,
     token: str = Depends(get_bearer_token),
 ) -> list[dict]:
-    sessions = await list_nutritionist_chat_sessions(patient_id, token)
+    sessions = await list_nutritionist_chat_sessions(patient_id=patient_id, token=token)
     return sessions[offset : offset + limit]
 
 
@@ -343,6 +357,10 @@ async def _stream_chat_response(
                 "session_id": session.get("id"),
             },
         )
+        print(
+            "Contexto enviado para IA:",
+            json.dumps(_debug_context_payload(context), ensure_ascii=False, default=str),
+        )
     system_prompt = context_service.build_system_prompt(
         context,
         payload.content,
@@ -372,15 +390,26 @@ async def _stream_chat_response(
             for action in agent_actions:
                 yield _event("action", action)
 
-            response_prompt = _with_agent_actions(system_prompt, agent_actions)
-            async for delta in ai_service.stream_chat(
-                system_prompt=response_prompt,
-                history=history,
-                reasoning_level=payload.reasoning_level,
-                user_message=payload.content,
-            ):
-                answer += delta
-                yield _event("delta", {"content": delta})
+            deterministic_answer = _answer_from_agent_actions(agent_actions)
+            if not deterministic_answer and _looks_like_write_request(payload.content):
+                deterministic_answer = (
+                    "Não foi possível concluir esta ação. Nenhuma operação foi executada "
+                    "no banco de dados, então nenhuma alteração foi salva."
+                )
+
+            if deterministic_answer:
+                answer = deterministic_answer
+                yield _event("delta", {"content": deterministic_answer})
+            else:
+                response_prompt = _with_agent_actions(system_prompt, agent_actions)
+                async for delta in ai_service.stream_chat(
+                    system_prompt=response_prompt,
+                    history=history,
+                    reasoning_level=payload.reasoning_level,
+                    user_message=payload.content,
+                ):
+                    answer += delta
+                    yield _event("delta", {"content": delta})
 
             saved = await workspace.insert_chat_message(
                 messages_table=messages_table,
@@ -408,7 +437,12 @@ async def _stream_chat_response(
             )
             yield _event("done", {"message": saved})
         except Exception as exc:
-            yield _event("error", {"detail": str(exc)})
+            if settings.app_env == "development":
+                print("Erro real no stream do chat:", repr(exc))
+            yield _event(
+                "error",
+                {"detail": "Não foi possível concluir esta ação agora. Tente novamente em instantes."},
+            )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -432,6 +466,7 @@ async def _list_legacy_chats(
 
 def _normalize_legacy_payload(raw_payload: dict) -> SendChatMessageRequest:
     return SendChatMessageRequest(
+        chat_scope=raw_payload.get("chat_scope") or raw_payload.get("chatScope"),
         content=(
             raw_payload.get("content")
             or raw_payload.get("message")
@@ -495,3 +530,123 @@ def _with_agent_actions(system_prompt: str, actions: list[dict]) -> str:
         "pergunte se o usuario deseja adicionar essa observacao; a proxima resposta curta "
         "deve confirmar somente essa pending_action."
     )
+
+
+def _answer_from_agent_actions(actions: list[dict]) -> str | None:
+    if not actions:
+        return None
+
+    lines: list[str] = []
+    for action in actions:
+        status_value = action.get("status")
+        result = action.get("result") or {}
+        summary = (
+            result.get("summary")
+            or action.get("summary")
+            or action.get("error")
+            or "Ação avaliada."
+        )
+        if action.get("success") is True and status_value == "executed":
+            lines.append(str(summary))
+        elif status_value == "pending_confirmation":
+            lines.append(str(summary))
+        else:
+            reason = action.get("error") or summary
+            lines.append(f"Não foi possível concluir esta ação. Motivo: {reason}")
+
+    return "\n".join(line.strip() for line in lines if line).strip() or None
+
+
+def _looks_like_write_request(content: str) -> bool:
+    normalized = _normalize_text(content)
+    return any(
+        term in normalized
+        for term in (
+            "adicionar",
+            "adicione",
+            "alterar",
+            "altere",
+            "atualizar",
+            "atualize",
+            "cadastrar",
+            "cadastre",
+            "cancelar",
+            "cancele",
+            "corrigir",
+            "corrija",
+            "criar",
+            "crie",
+            "deletar",
+            "editar",
+            "edite",
+            "excluir",
+            "exclua",
+            "marcar",
+            "marque",
+            "mudar",
+            "mude",
+            "registrar",
+            "registre",
+            "remover",
+            "remova",
+            "salvar",
+            "salve",
+            "trocar",
+            "troque",
+        )
+    )
+
+
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(re.sub(r"\s+", " ", ascii_value.lower()).split())
+
+
+def _debug_context_payload(context: dict) -> dict:
+    patient = context.get("patient") or {}
+    profile = patient.get("profile") or context.get("profile") or {}
+    workspace_summary = context.get("workspace_summary") or {}
+    return {
+        "patient": None
+        if not patient
+        else {
+            "id": patient.get("id"),
+            "full_name": profile.get("full_name"),
+            "birth_date": patient.get("birth_date"),
+            "gender": patient.get("gender"),
+            "objective": patient.get("objective"),
+        },
+        "nutritionist_id": (context.get("nutritionist") or {}).get("id"),
+        "workspace_summary": {
+            "patients_count": workspace_summary.get("patients_count"),
+            "active_patients_count": workspace_summary.get("active_patients_count"),
+            "patients_index": workspace_summary.get("patients_index", [])[:20],
+        },
+        "counts": {
+            "main_metrics": len(context.get("main_metrics", [])),
+            "variable_metrics": len(context.get("variable_metrics", [])),
+            "conditions": len(context.get("conditions", [])),
+            "diets": len(context.get("diets", [])),
+            "workouts": len(context.get("workouts", [])),
+            "appointments": len(context.get("appointments", [])),
+        },
+    }
+
+
+def _raise_session_error(exc: Exception) -> None:
+    if settings.app_env == "development":
+        print("Erro real em /chat/nutritionist/sessions:", repr(exc))
+
+    if isinstance(exc, HTTPException) and exc.status_code in {
+        status.HTTP_400_BAD_REQUEST,
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    }:
+        raise exc
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Não foi possível iniciar a conversa.",
+    ) from exc

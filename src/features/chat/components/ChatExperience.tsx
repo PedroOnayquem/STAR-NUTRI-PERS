@@ -233,6 +233,13 @@ export function ChatExperience({
       <div className="grid h-full min-h-0 lg:grid-cols-[292px_minmax(0,1fr)]">
         <ChatSidebar
           canCreate={hasRequiredFocus}
+          createLabel={
+            isProfessional
+              ? isGeneralProfessionalChat
+                ? 'Novo chat geral'
+                : 'Novo chat com paciente'
+              : 'Novo chat'
+          }
           creating={chat.creatingSession}
           currentSessionId={chat.activeSessionId}
           isLoading={chat.isLoading}
@@ -343,6 +350,7 @@ export function ChatExperience({
 
 function ChatSidebar({
   canCreate,
+  createLabel,
   creating,
   currentSessionId,
   isLoading,
@@ -354,6 +362,7 @@ function ChatSidebar({
   sessions,
 }: {
   canCreate: boolean
+  createLabel: string
   creating: boolean
   currentSessionId: string | null
   isLoading: boolean
@@ -379,7 +388,7 @@ function ChatSidebar({
           ) : (
             <MessageSquarePlus size={17} />
           )}
-          Novo chat
+          {createLabel}
         </Button>
 
         <label className="flex h-10 items-center gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/35 px-3 text-slate-400 shadow-inner shadow-cyan-950/10 transition focus-within:border-cyan-300/35 focus-within:bg-slate-950/55 focus-within:text-cyan-100 focus-within:ring-2 focus-within:ring-cyan-400/10">

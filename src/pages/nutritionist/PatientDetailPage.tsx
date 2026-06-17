@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 import {
@@ -10,10 +10,12 @@ import {
   Dumbbell,
   ExternalLink,
   HeartPulse,
+  Loader2,
   MapPin,
   Pencil,
   Plus,
   Save,
+  Search,
   Trash2,
   Utensils,
   X,
@@ -58,12 +60,23 @@ import {
   upsertWorkoutExercises,
 } from '../../features/clinical/services/clinicalDataService'
 import {
+  calculateDietTotals,
+  calculateFoodNutrients,
+  calculateMealTotals,
+  dietMealFoodFromTacoFood,
+  formatNutrient,
+  parseQuantityG,
+} from '../../features/taco/nutrition'
+import { createDietMealItem, searchTacoFoods } from '../../features/taco/services/tacoService'
+import type { TacoFoodRecord } from '../../features/taco/types'
+import {
   getPatientImportFileSignedUrls,
   getNutritionistPatientContext,
   updateNutritionistPatient,
 } from '../../features/clinical/services/workspaceService'
 import type {
   DietRecord,
+  DietMealRecord,
   HealthConditionRecord,
   AppointmentStatus,
   AppointmentType,
@@ -363,8 +376,18 @@ function DietCard({ diet, onChange }: { diet: DietRecord; onChange: () => void }
         <h3 className="font-bold">Refeições</h3>
         {(diet.meals ?? []).map((item) => (
           <div className="rounded-2xl border border-slate-200 p-3 text-sm dark:border-white/10" key={item.id}>
-            <p className="font-bold">{item.meal_name} {item.meal_time && <span className="text-slate-400">- {item.meal_time}</span>}</p>
-            <p className="mt-1 text-slate-500 dark:text-slate-400">{item.foods.map((food) => `${food.name} ${food.quantity}`).join(', ')}</p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="font-bold">{item.meal_name} {item.meal_time && <span className="text-slate-400">- {item.meal_time}</span>}</p>
+                <p className="mt-1 text-slate-500 dark:text-slate-400">
+                  {(item.foods ?? []).length
+                    ? item.foods.map((food) => `${food.name} ${food.quantity}`).join(', ')
+                    : 'Sem alimentos cadastrados.'}
+                </p>
+              </div>
+              <MealTotals meal={item} />
+            </div>
+            <TacoMealFoodAdder diet={diet} meal={item} onChange={onChange} />
           </div>
         ))}
         <div className="grid gap-2 md:grid-cols-[1fr_130px]">
@@ -375,6 +398,181 @@ function DietCard({ diet, onChange }: { diet: DietRecord; onChange: () => void }
         </div>
       </div>
     </Card>
+  )
+}
+
+function MealTotals({ meal }: { meal: DietMealRecord }) {
+  const totals = calculateMealTotals(meal)
+  if (!Object.values(totals).some((value) => value > 0)) return null
+
+  return (
+    <div className="grid min-w-[220px] grid-cols-3 gap-1 text-xs">
+      <span className="rounded-lg bg-emerald-50 px-2 py-1 font-bold text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-200">
+        {formatNutrient(totals.energy_kcal, 'kcal')}
+      </span>
+      <span className="rounded-lg bg-slate-100 px-2 py-1 text-slate-600 dark:bg-white/5 dark:text-slate-300">
+        P {formatNutrient(totals.protein_g, 'g')}
+      </span>
+      <span className="rounded-lg bg-slate-100 px-2 py-1 text-slate-600 dark:bg-white/5 dark:text-slate-300">
+        C {formatNutrient(totals.carbohydrate_g, 'g')}
+      </span>
+    </div>
+  )
+}
+
+function TacoMealFoodAdder({
+  diet,
+  meal,
+  onChange,
+}: {
+  diet: DietRecord
+  meal: DietMealRecord
+  onChange: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [quantity, setQuantity] = useState('100')
+  const [selectedFood, setSelectedFood] = useState<TacoFoodRecord | null>(null)
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQuery(query.trim()), 240)
+    return () => window.clearTimeout(timeout)
+  }, [query])
+
+  const foodsQuery = useQuery({
+    queryKey: ['taco-meal-search', meal.id, debouncedQuery],
+    queryFn: () => searchTacoFoods({
+      page: 1,
+      pageSize: 6,
+      query: debouncedQuery,
+    }),
+    enabled: debouncedQuery.length >= 2,
+  })
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const quantityG = parseQuantityG(quantity)
+      if (!selectedFood || !quantityG) {
+        throw new Error('Selecione um alimento e informe a quantidade em gramas.')
+      }
+
+      const nutrients = calculateFoodNutrients(selectedFood, quantityG)
+      const createdItem = await createDietMealItem({
+        carbohydrate_g: nutrients.carbohydrate_g,
+        energy_kcal: nutrients.energy_kcal,
+        fiber_g: nutrients.fiber_g,
+        lipid_g: nutrients.lipid_g,
+        meal_id: meal.id,
+        protein_g: nutrients.protein_g,
+        quantity_g: quantityG,
+        sodium_mg: nutrients.sodium_mg,
+        taco_food_id: selectedFood.id,
+      })
+      const nextFood = dietMealFoodFromTacoFood(selectedFood, quantityG)
+      const nextFoods = [...(meal.foods ?? []), nextFood]
+      await upsertDietMeals(diet.id, [{
+        id: meal.id,
+        meal_name: meal.meal_name,
+        meal_time: meal.meal_time,
+        foods: nextFoods,
+        notes: meal.notes,
+      }])
+
+      const nextMeals = (diet.meals ?? []).map((item) =>
+        item.id === meal.id
+          ? {
+              ...item,
+              foods: nextFoods,
+              items: [...(item.items ?? []), createdItem],
+            }
+          : item,
+      )
+      const totals = calculateDietTotals(nextMeals)
+      await updateDiet(diet.id, {
+        calories: Math.round(totals.energy_kcal),
+        carbs: totals.carbohydrate_g,
+        fats: totals.lipid_g,
+        protein: totals.protein_g,
+      })
+    },
+    onSuccess: () => {
+      setQuery('')
+      setDebouncedQuery('')
+      setSelectedFood(null)
+      setQuantity('100')
+      onChange()
+    },
+  })
+
+  const results = foodsQuery.data?.foods ?? []
+
+  return (
+    <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
+        <label className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <Input
+            className="pl-9"
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setSelectedFood(null)
+            }}
+            placeholder="Buscar alimento TACO"
+            value={selectedFood ? selectedFood.name : query}
+          />
+        </label>
+        <Input
+          inputMode="decimal"
+          onChange={(event) => setQuantity(event.target.value)}
+          placeholder="g"
+          value={quantity}
+        />
+        <Button
+          disabled={!selectedFood || mutation.isPending}
+          onClick={() => mutation.mutate()}
+          type="button"
+          variant="secondary"
+        >
+          {mutation.isPending ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+          TACO
+        </Button>
+      </div>
+
+      {!selectedFood && debouncedQuery.length >= 2 && (
+        <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950/80">
+          {foodsQuery.isLoading ? (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-slate-500">
+              <Loader2 className="animate-spin" size={14} />
+              Buscando
+            </div>
+          ) : results.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-slate-500">Nenhum alimento encontrado.</div>
+          ) : (
+            results.map((food) => (
+              <button
+                className="flex w-full items-center justify-between gap-3 border-t border-slate-100 px-3 py-2 text-left text-xs first:border-t-0 hover:bg-emerald-50 dark:border-white/5 dark:hover:bg-emerald-400/10"
+                key={food.id}
+                onClick={() => {
+                  setSelectedFood(food)
+                  setQuery(food.name)
+                }}
+                type="button"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-bold">{food.name}</span>
+                  <span className="block truncate text-slate-500">{food.category || 'Sem categoria'}</span>
+                </span>
+                <span className="shrink-0 font-bold text-emerald-600 dark:text-emerald-300">
+                  {formatNutrient(food.energy_kcal, 'kcal')}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
+      {mutation.error && <ErrorText>{mutation.error.message}</ErrorText>}
+    </div>
   )
 }
 

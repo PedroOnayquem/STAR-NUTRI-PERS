@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+import re
 from time import perf_counter
 from typing import Any
+import unicodedata
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -734,8 +736,12 @@ class SupabaseWorkspaceService:
                 [row["id"] for row in workouts],
             ),
         )
+        meal_items = await self._diet_meal_items_by_meal(meals)
         for diet in diets:
-            diet["meals"] = meals.get(diet["id"], [])
+            diet["meals"] = self._attach_items_to_meals(
+                meals.get(diet["id"], []),
+                meal_items,
+            )
         for workout in workouts:
             workout["exercises"] = exercises.get(workout["id"], [])
 
@@ -855,9 +861,13 @@ class SupabaseWorkspaceService:
                 [row["id"] for row in workouts],
             ),
         )
+        meal_items = await self._diet_meal_items_by_meal(meals)
 
         for diet in diets:
-            diet["meals"] = meals.get(diet["id"], [])
+            diet["meals"] = self._attach_items_to_meals(
+                meals.get(diet["id"], []),
+                meal_items,
+            )
         for workout in workouts:
             workout["exercises"] = exercises.get(workout["id"], [])
 
@@ -960,6 +970,296 @@ class SupabaseWorkspaceService:
             )
         return patient
 
+    async def search_patients_by_name_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        query: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        clean_query = _normalize_search_text(query)
+        if not clean_query:
+            return []
+
+        rows = await self._request(
+            "GET",
+            "/rest/v1/patients",
+            params={
+                "nutritionist_id": f"eq.{nutritionist_id}",
+                "select": (
+                    "id,user_id,nutritionist_id,birth_date,gender,objective,notes,"
+                    "is_active,created_at,updated_at"
+                ),
+                "order": "updated_at.desc.nullslast,created_at.desc",
+                "limit": "500",
+            },
+        )
+        patients = self._dedupe_patients(await self._attach_profiles(rows))
+
+        matches: list[tuple[int, str, dict]] = []
+        for patient in patients:
+            profile = patient.get("profile") or {}
+            full_name = profile.get("full_name") or ""
+            nickname = (
+                patient.get("nickname")
+                or profile.get("nickname")
+                or profile.get("preferred_name")
+                or ""
+            )
+            normalized_name = _normalize_search_text(full_name)
+            normalized_nickname = _normalize_search_text(nickname)
+            score = self._patient_name_match_score(
+                clean_query,
+                normalized_name,
+                normalized_nickname,
+            )
+            if score <= 0:
+                continue
+
+            matches.append(
+                (
+                    score,
+                    str(patient.get("updated_at") or patient.get("created_at") or ""),
+                    patient,
+                )
+            )
+
+        matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [
+            self._compact_patient_lookup(row)
+            for _, _, row in matches[: max(1, min(limit, 25))]
+        ]
+
+    async def get_patient_profile_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+    ) -> dict:
+        patient = await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        profile, main_metrics, variable_metrics = await asyncio.gather(
+            self.get_profile(patient["user_id"]),
+            self._request(
+                "GET",
+                "/rest/v1/patient_main_metrics",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "id,patient_id,name,value,unit,created_at,updated_at",
+                    "order": "created_at.desc",
+                    "limit": "80",
+                },
+            ),
+            self._request(
+                "GET",
+                "/rest/v1/patient_variable_metrics",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "id,patient_id,name,value,unit,recorded_at,created_at",
+                    "order": "recorded_at.desc.nullslast,created_at.desc",
+                    "limit": "120",
+                },
+            ),
+        )
+        metrics = [*variable_metrics, *main_metrics]
+        birth_date = patient.get("birth_date")
+        return {
+            "id": patient["id"],
+            "full_name": profile.get("full_name"),
+            "email": profile.get("email"),
+            "phone": profile.get("phone"),
+            "gender": patient.get("gender"),
+            "birth_date": birth_date,
+            "age": calculate_age(birth_date),
+            "height_cm": self._height_cm_from_metrics(metrics),
+            "objective": patient.get("objective"),
+            "notes": patient.get("notes"),
+            "is_active": patient.get("is_active"),
+            "created_at": patient.get("created_at"),
+            "updated_at": patient.get("updated_at"),
+        }
+
+    async def list_patient_metrics_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        limit: int = 40,
+    ) -> dict:
+        await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        main_metrics, variable_metrics = await asyncio.gather(
+            self._request(
+                "GET",
+                "/rest/v1/patient_main_metrics",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "*",
+                    "order": "created_at.desc",
+                    "limit": str(max(1, min(limit, 120))),
+                },
+            ),
+            self._request(
+                "GET",
+                "/rest/v1/patient_variable_metrics",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "select": "*",
+                    "order": "recorded_at.desc.nullslast,created_at.desc",
+                    "limit": str(max(1, min(limit, 120))),
+                },
+            ),
+        )
+        metrics = [*variable_metrics, *main_metrics]
+        return {
+            "main_metrics": main_metrics,
+            "variable_metrics": variable_metrics,
+            "latest_weight": self._latest_metric_by_terms(metrics, ("peso", "weight")),
+            "height_cm": self._height_cm_from_metrics(metrics),
+        }
+
+    async def list_patient_conditions_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        limit: int = 40,
+    ) -> list[dict]:
+        await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        return await self._request(
+            "GET",
+            "/rest/v1/patient_health_conditions",
+            params={
+                "patient_id": f"eq.{patient_id}",
+                "select": "*",
+                "order": "created_at.desc",
+                "limit": str(max(1, min(limit, 120))),
+            },
+        )
+
+    async def get_patient_summary_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+    ) -> dict:
+        patient = await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        nutritionist_rows = await self._request(
+            "GET",
+            "/rest/v1/nutritionists",
+            params={"id": f"eq.{nutritionist_id}", "select": "*", "limit": "1"},
+        )
+        nutritionist = nutritionist_rows[0] if nutritionist_rows else None
+        context = await self.get_patient_context(
+            patient,
+            nutritionist,
+            chat_scope="nutritionist",
+        )
+        profile = await self.get_patient_profile_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        metrics = {
+            "main_metrics": context.get("main_metrics", [])[:30],
+            "variable_metrics": context.get("variable_metrics", [])[:40],
+            "latest_weight": self._latest_metric_by_terms(
+                [
+                    *context.get("variable_metrics", []),
+                    *context.get("main_metrics", []),
+                ],
+                ("peso", "weight"),
+            ),
+            "height_cm": profile.get("height_cm"),
+        }
+        return {
+            "profile": profile,
+            "metrics": metrics,
+            "conditions": context.get("conditions", [])[:40],
+            "diets": context.get("diets", [])[:5],
+            "workouts": context.get("workouts", [])[:5],
+            "appointments": context.get("appointments", [])[:20],
+        }
+
+    async def update_patient_profile_for_nutritionist(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        payload: dict,
+    ) -> dict:
+        patient = await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        allowed_patient_fields = {
+            "birth_date",
+            "gender",
+            "objective",
+            "notes",
+            "is_active",
+        }
+        patient_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in allowed_patient_fields
+        }
+        profile_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in {"full_name", "phone"}
+        }
+
+        if patient_payload:
+            updated = await self._request(
+                "PATCH",
+                "/rest/v1/patients",
+                params={"id": f"eq.{patient_id}", "select": "*"},
+                json=patient_payload,
+                prefer="return=representation",
+            )
+            patient = updated[0] if updated else {**patient, **patient_payload}
+
+        if profile_payload:
+            await self._request(
+                "PATCH",
+                "/rest/v1/profiles",
+                params={"id": f"eq.{patient['user_id']}", "select": "*"},
+                json=profile_payload,
+                prefer="return=representation",
+            )
+
+        updated_profile = await self.get_patient_profile_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        mismatched_fields = {
+            key: {
+                "expected": value,
+                "saved": updated_profile.get(key),
+            }
+            for key, value in payload.items()
+            if updated_profile.get(key) != value
+        }
+        if mismatched_fields:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "message": "Não foi possível confirmar que o cadastro foi salvo.",
+                    "fields": mismatched_fields,
+                },
+            )
+        return updated_profile
+
     async def update_patient_record_for_nutritionist(
         self,
         *,
@@ -985,14 +1285,34 @@ class SupabaseWorkspaceService:
         if not patient_payload:
             return patient
 
-        rows = await self._request(
+        await self._request(
             "PATCH",
             "/rest/v1/patients",
             params={"id": f"eq.{patient_id}", "select": "*"},
             json=patient_payload,
             prefer="return=representation",
         )
-        return rows[0] if rows else {**patient, **patient_payload}
+        verified = await self.get_patient_record_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        mismatched_fields = {
+            key: {
+                "expected": value,
+                "saved": verified.get(key),
+            }
+            for key, value in patient_payload.items()
+            if verified.get(key) != value
+        }
+        if mismatched_fields:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "message": "Não foi possível confirmar que o cadastro foi salvo.",
+                    "fields": mismatched_fields,
+                },
+            )
+        return verified
 
     async def update_my_patient_profile(
         self,
@@ -1052,7 +1372,7 @@ class SupabaseWorkspaceService:
             json=payload,
             prefer="return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("diet_meal_items", rows[0]["id"])
 
     async def list_conversation_memories(
         self,
@@ -1092,7 +1412,7 @@ class SupabaseWorkspaceService:
             params={"on_conflict": "conversation_id,user_id,chat_type"},
             prefer="resolution=merge-duplicates,return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("patient_appointments", rows[0]["id"])
 
     async def list_ai_action_logs_for_context(
         self,
@@ -1163,6 +1483,19 @@ class SupabaseWorkspaceService:
             params={"id": f"eq.{state_id}"},
         )
 
+    async def _get_row_by_id(self, table: str, row_id: str) -> dict:
+        rows = await self._request(
+            "GET",
+            f"/rest/v1/{table}",
+            params={"id": f"eq.{row_id}", "select": "*", "limit": "1"},
+        )
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Não foi possível confirmar o registro salvo em {table}.",
+            )
+        return await self._get_row_by_id("patient_variable_metrics", rows[0]["id"])
+
     async def create_health_condition_record(
         self,
         *,
@@ -1194,7 +1527,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("diet_meals", rows[0]["id"])
 
     async def create_training_plan_record(
         self,
@@ -1222,7 +1555,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("diet_meals", rows[0]["id"])
 
     async def create_training_day_records(
         self,
@@ -1428,7 +1761,12 @@ class SupabaseWorkspaceService:
                 "order": "meal_time.asc,created_at.asc",
             },
         )
-        diet["meals"] = meals
+        items_by_meal = await self._rows_by_parent(
+            "diet_meal_items",
+            "meal_id",
+            [meal["id"] for meal in meals],
+        )
+        diet["meals"] = self._attach_items_to_meals(meals, items_by_meal)
         return diet
 
     async def create_diet_meal_record(
@@ -1480,7 +1818,94 @@ class SupabaseWorkspaceService:
             json=payload,
             prefer="return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("diets", rows[0]["id"])
+
+    async def search_taco_foods(
+        self,
+        *,
+        query: str,
+        category: str | None = None,
+        limit: int = 8,
+    ) -> list[dict]:
+        params = {
+            "select": "*",
+            "order": "name.asc",
+            "limit": str(min(max(limit, 1), 20)),
+        }
+        safe_query = _postgrest_search_term(query)
+        if safe_query:
+            normalized = _normalize_search_text(safe_query)
+            params["or"] = (
+                f"(name.ilike.*{safe_query}*,search_name.ilike.*{normalized}*,"
+                f"normalized_name.ilike.*{normalized}*)"
+            )
+        if category:
+            params["category"] = f"eq.{category}"
+
+        return await self._request(
+            "GET",
+            "/rest/v1/taco_foods",
+            params=params,
+        )
+
+    async def get_taco_food(self, food_id: str) -> dict:
+        rows = await self._request(
+            "GET",
+            "/rest/v1/taco_foods",
+            params={
+                "id": f"eq.{food_id}",
+                "select": "*",
+                "limit": "1",
+            },
+        )
+        food = rows[0] if rows else None
+        if not food:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Alimento TACO nao encontrado.",
+            )
+        return food
+
+    async def find_taco_food(
+        self,
+        *,
+        food_id: str | None = None,
+        query: str | None = None,
+    ) -> dict | None:
+        if food_id:
+            return await self.get_taco_food(food_id)
+        if not query:
+            return None
+        foods = await self.search_taco_foods(query=query, limit=1)
+        return foods[0] if foods else None
+
+    async def create_diet_meal_item(
+        self,
+        *,
+        meal_id: str,
+        taco_food_id: str | None,
+        custom_food_name: str | None,
+        quantity_g: float,
+        nutrients: dict,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/diet_meal_items",
+            json={
+                "meal_id": meal_id,
+                "taco_food_id": taco_food_id,
+                "custom_food_name": custom_food_name,
+                "quantity_g": quantity_g,
+                "energy_kcal": nutrients.get("energy_kcal"),
+                "protein_g": nutrients.get("protein_g"),
+                "carbohydrate_g": nutrients.get("carbohydrate_g"),
+                "lipid_g": nutrients.get("lipid_g"),
+                "fiber_g": nutrients.get("fiber_g"),
+                "sodium_mg": nutrients.get("sodium_mg"),
+            },
+            prefer="return=representation",
+        )
+        return await self._get_row_by_id("patient_health_conditions", rows[0]["id"])
 
     async def find_appointment(
         self,
@@ -1540,7 +1965,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("training_plans", rows[0]["id"])
 
     async def create_appointment_record(
         self,
@@ -1600,12 +2025,15 @@ class SupabaseWorkspaceService:
         nutritionist_id: str,
         patient_id: str | None,
         *,
+        chat_scope: str | None = None,
         limit: int | None = None,
     ) -> list[dict]:
+        resolved_scope = chat_scope or ("patient" if patient_id else "general")
         params = {
             "nutritionist_id": f"eq.{nutritionist_id}",
             "select": "*",
             "order": "updated_at.desc,created_at.desc",
+            "chat_scope": f"eq.{resolved_scope}",
         }
         params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
         if limit:
@@ -1641,6 +2069,8 @@ class SupabaseWorkspaceService:
         self,
         token: str,
         patient_id: str | None = None,
+        *,
+        chat_scope: str | None = None,
     ) -> list[dict]:
         profile = await self.get_authenticated_profile(token)
         if profile["role"] != "nutritionist":
@@ -1650,12 +2080,30 @@ class SupabaseWorkspaceService:
             )
 
         nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        if chat_scope and chat_scope not in {"general", "patient"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Escopo de chat invalido.",
+            )
+        if chat_scope == "general":
+            patient_id = None
         if patient_id:
             await self.resolve_nutritionist_patient(token, patient_id)
+
+        if settings.app_env == "development":
+            print(
+                "GET sessions:",
+                {
+                    "nutritionist_id": nutritionist["id"],
+                    "chat_scope": chat_scope or ("patient" if patient_id else "general"),
+                    "patient_id": patient_id,
+                },
+            )
 
         return await self.list_nutritionist_chats_for_patient(
             nutritionist["id"],
             patient_id,
+            chat_scope=chat_scope,
         )
 
     async def list_authorized_patient_chats(self, token: str) -> list[dict]:
@@ -1667,11 +2115,23 @@ class SupabaseWorkspaceService:
         nutritionist_id: str,
         patient_id: str | None,
         title: str | None = None,
+        *,
+        chat_scope: str | None = None,
     ) -> dict:
+        resolved_scope = chat_scope or ("patient" if patient_id else "general")
+        if resolved_scope == "patient" and not patient_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Chat por paciente exige paciente em foco.",
+            )
+        if resolved_scope == "general":
+            patient_id = None
+
         rows = await self._request(
             "POST",
             "/rest/v1/nutritionist_chats",
             json={
+                "chat_scope": resolved_scope,
                 "nutritionist_id": nutritionist_id,
                 "patient_id": patient_id,
                 "title": title
@@ -1683,7 +2143,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return rows[0]
+        return await self._get_row_by_id("workouts", rows[0]["id"])
 
     async def create_patient_chat(
         self,
@@ -1706,6 +2166,8 @@ class SupabaseWorkspaceService:
         token: str,
         patient_id: str | None = None,
         title: str | None = None,
+        *,
+        chat_scope: str | None = None,
     ) -> dict:
         profile = await self.get_authenticated_profile(token)
         if profile["role"] != "nutritionist":
@@ -1715,18 +2177,36 @@ class SupabaseWorkspaceService:
             )
 
         nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        resolved_scope = chat_scope or ("patient" if patient_id else "general")
         resolved_patient_id: str | None = None
-        if patient_id:
+        if resolved_scope == "patient" and patient_id:
             _, _, patient = await self.resolve_nutritionist_patient(
                 token,
                 patient_id,
             )
             resolved_patient_id = patient["id"]
+        elif resolved_scope == "patient":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Chat por paciente exige paciente em foco.",
+            )
+
+        if settings.app_env == "development":
+            print(
+                "POST session:",
+                {
+                    "nutritionist_id": nutritionist["id"],
+                    "chat_scope": resolved_scope,
+                    "patient_id": resolved_patient_id,
+                    "title": title,
+                },
+            )
 
         return await self.create_nutritionist_chat(
             nutritionist["id"],
             resolved_patient_id,
             title,
+            chat_scope=resolved_scope,
         )
 
     async def create_authorized_patient_chat(
@@ -1741,6 +2221,7 @@ class SupabaseWorkspaceService:
         self,
         chat_id: str,
         *,
+        chat_scope: str | None = None,
         nutritionist_id: str,
         patient_id: str | None | object = _UNSET,
     ) -> dict:
@@ -1752,6 +2233,8 @@ class SupabaseWorkspaceService:
         }
         if patient_id is not _UNSET:
             params["patient_id"] = f"eq.{patient_id}" if patient_id else "is.null"
+        if chat_scope:
+            params["chat_scope"] = f"eq.{chat_scope}"
 
         rows = await self._request(
             "GET",
@@ -1790,14 +2273,22 @@ class SupabaseWorkspaceService:
         nutritionist_id: str,
         patient_id: str | None,
         chat_id: str | None,
+        *,
+        chat_scope: str | None = None,
     ) -> dict:
+        resolved_scope = chat_scope or ("patient" if patient_id else "general")
         if chat_id:
             return await self.get_nutritionist_chat(
                 chat_id,
+                chat_scope=resolved_scope,
                 nutritionist_id=nutritionist_id,
                 patient_id=patient_id,
             )
-        return await self.create_nutritionist_chat(nutritionist_id, patient_id)
+        return await self.create_nutritionist_chat(
+            nutritionist_id,
+            patient_id,
+            chat_scope=resolved_scope,
+        )
 
     async def ensure_patient_chat(
         self,
@@ -2029,6 +2520,76 @@ class SupabaseWorkspaceService:
             deduped.append(patient)
 
         return deduped
+
+    def _compact_patient_lookup(self, patient: dict) -> dict:
+        profile = patient.get("profile") or {}
+        birth_date = patient.get("birth_date")
+        return {
+            "id": patient.get("id"),
+            "full_name": profile.get("full_name"),
+            "email": profile.get("email"),
+            "gender": patient.get("gender"),
+            "birth_date": birth_date,
+            "age": calculate_age(birth_date),
+            "objective": patient.get("objective"),
+            "is_active": patient.get("is_active"),
+            "created_at": patient.get("created_at"),
+            "updated_at": patient.get("updated_at"),
+        }
+
+    def _patient_name_match_score(
+        self,
+        query: str,
+        normalized_name: str,
+        normalized_nickname: str,
+    ) -> int:
+        fields = [field for field in (normalized_name, normalized_nickname) if field]
+        if not fields:
+            return 0
+
+        query_tokens = query.split()
+        best_score = 0
+        for field in fields:
+            field_tokens = field.split()
+            if query == field:
+                best_score = max(best_score, 100)
+            if field_tokens and query == field_tokens[0]:
+                best_score = max(best_score, 92)
+            if field.startswith(query):
+                best_score = max(best_score, 85)
+            if query in field:
+                best_score = max(best_score, 76)
+            if query_tokens and all(token in field_tokens for token in query_tokens):
+                best_score = max(best_score, 70)
+            if query_tokens and all(token in field for token in query_tokens):
+                best_score = max(best_score, 60)
+        return best_score
+
+    def _height_cm_from_metrics(self, metrics: list[dict]) -> float | None:
+        metric = self._latest_metric_by_terms(metrics, ("altura", "height", "estatura"))
+        if not metric:
+            return None
+
+        value = _metric_number(metric.get("value"))
+        if value is None:
+            return None
+
+        unit = _normalize_search_text(metric.get("unit") or "")
+        if unit in {"m", "metro", "metros"} or value < 3:
+            return round(value * 100, 1)
+        return round(value, 1)
+
+    def _latest_metric_by_terms(
+        self,
+        metrics: list[dict],
+        terms: tuple[str, ...],
+    ) -> dict | None:
+        normalized_terms = tuple(_normalize_search_text(term) for term in terms)
+        for metric in metrics:
+            name = _normalize_search_text(metric.get("name") or "")
+            if any(term and term in name for term in normalized_terms):
+                return metric
+        return None
 
     def _latest_by_patient(
         self,
@@ -2344,6 +2905,27 @@ class SupabaseWorkspaceService:
             grouped.setdefault(row[parent_column], []).append(row)
         return grouped
 
+    async def _diet_meal_items_by_meal(
+        self,
+        meals_by_diet: dict[str, list[dict]],
+    ) -> dict[str, list[dict]]:
+        meal_ids = [
+            meal["id"]
+            for meals in meals_by_diet.values()
+            for meal in meals
+            if meal.get("id")
+        ]
+        return await self._rows_by_parent("diet_meal_items", "meal_id", meal_ids)
+
+    def _attach_items_to_meals(
+        self,
+        meals: list[dict],
+        items_by_meal: dict[str, list[dict]],
+    ) -> list[dict]:
+        for meal in meals:
+            meal["items"] = items_by_meal.get(meal["id"], [])
+        return meals
+
     async def _get_recent_messages(self, chats: list[dict], table: str) -> list[dict]:
         if not chats:
             return []
@@ -2375,3 +2957,55 @@ class SupabaseWorkspaceService:
             or body.get("error")
             or "Supabase request failed."
         )
+
+
+def _normalize_search_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", ascii_value.lower()).split())
+
+
+def _postgrest_search_term(value: str) -> str:
+    return " ".join(re.sub(r"[%*',().]", " ", str(value or "")).split())
+
+
+def calculate_age(birth_date: Any) -> int | None:
+    if birth_date is None:
+        return None
+
+    text = str(birth_date).strip()
+    if not text:
+        return None
+
+    try:
+        date_value = datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+    try:
+        today = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+    except Exception:
+        today = datetime.now(UTC).date()
+
+    if date_value > today:
+        return None
+
+    age = today.year - date_value.year
+    if (today.month, today.day) < (date_value.month, date_value.day):
+        age -= 1
+    return age
+
+
+def _metric_number(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    text = str(value).strip().replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None

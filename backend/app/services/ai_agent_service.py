@@ -7,9 +7,18 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..core.config import settings
 from .openai_service import OpenAIChatService
 from .supabase_workspace_service import SupabaseWorkspaceService
 
+
+PATIENT_READ_TOOLS = {
+    "get_patient_conditions",
+    "get_patient_metrics",
+    "get_patient_profile",
+    "get_patient_summary",
+    "search_patient_by_name",
+}
 
 AUTO_TOOLS = {
     "add_food_to_meal",
@@ -22,9 +31,24 @@ AUTO_TOOLS = {
     "register_progress",
     "register_weight_change",
     "update_patient_birth_date",
+    "update_patient_profile",
 }
 
-NUTRITIONIST_TOOLS = AUTO_TOOLS | {"request_confirmation"}
+TACO_TOOLS = {
+    "add_taco_food_to_meal",
+    "calculate_taco_food_nutrients",
+    "get_taco_food",
+    "search_taco_foods",
+}
+
+GENERAL_NUTRITIONIST_TOOLS = {
+    "calculate_taco_food_nutrients",
+    "get_taco_food",
+    "search_taco_foods",
+    "update_patient_birth_date",
+} | PATIENT_READ_TOOLS
+
+NUTRITIONIST_TOOLS = AUTO_TOOLS | TACO_TOOLS | PATIENT_READ_TOOLS | {"request_confirmation"}
 PATIENT_TOOLS = {
     "add_observation",
     "register_injury",
@@ -33,6 +57,78 @@ PATIENT_TOOLS = {
     "request_confirmation",
 }
 PENDING_TOOLS = {"add_workout_observation", "update_patient_birth_date"}
+
+PATIENT_QUERY_STOPWORDS = {
+    "a",
+    "agora",
+    "alterar",
+    "altere",
+    "anos",
+    "altura",
+    "atual",
+    "atualizar",
+    "atualize",
+    "cadastro",
+    "clinica",
+    "clinicas",
+    "com",
+    "condicao",
+    "condicoes",
+    "considerando",
+    "corrigir",
+    "corrija",
+    "da",
+    "dados",
+    "data",
+    "de",
+    "dele",
+    "dela",
+    "do",
+    "e",
+    "esse",
+    "essa",
+    "estao",
+    "esta",
+    "faca",
+    "faz",
+    "genero",
+    "idade",
+    "mudar",
+    "me",
+    "metricas",
+    "metrica",
+    "nascimento",
+    "o",
+    "objetivo",
+    "observacao",
+    "observacoes",
+    "paciente",
+    "peso",
+    "pois",
+    "possui",
+    "para",
+    "prontuario",
+    "qual",
+    "quais",
+    "quantos",
+    "quero",
+    "correta",
+    "correto",
+    "cadastrada",
+    "cadastrado",
+    "errada",
+    "errado",
+    "foi",
+    "resuma",
+    "resumo",
+    "sobre",
+    "tem",
+    "ter",
+    "trocar",
+    "troque",
+    "um",
+    "uma",
+}
 
 
 class AiAgentService:
@@ -57,12 +153,13 @@ class AiAgentService:
         user_message_record: dict,
     ) -> list[dict]:
         profile = await self.workspace.get_authenticated_profile(token)
-        if chat_scope == "nutritionist" and not context.get("patient"):
-            return []
-
-        allowed_tools = (
-            NUTRITIONIST_TOOLS if chat_scope == "nutritionist" else PATIENT_TOOLS
-        )
+        is_general_nutritionist_chat = chat_scope == "nutritionist" and not context.get("patient")
+        if is_general_nutritionist_chat:
+            allowed_tools = GENERAL_NUTRITIONIST_TOOLS
+        else:
+            allowed_tools = (
+                NUTRITIONIST_TOOLS if chat_scope == "nutritionist" else PATIENT_TOOLS
+            )
         pending_state = await self.workspace.get_ai_conversation_state(
             conversation_id=chat["id"],
             user_id=profile["id"],
@@ -155,6 +252,20 @@ class AiAgentService:
                     )
                 ]
             return []
+
+        if intent == "patient_lookup":
+            actions = await self._patient_lookup_actions(
+                actor=profile,
+                allowed_tools=allowed_tools,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                intent=intent,
+                message=user_message_record,
+                user_message=user_message,
+            )
+            if actions:
+                return actions
 
         fallback = self._fallback_tool_call(
             allowed_tools=allowed_tools,
@@ -311,11 +422,26 @@ class AiAgentService:
             "nao invente dia/mes e nao execute a alteracao.\n"
             "Use sempre o paciente em foco; não altere dados de outro paciente citado por engano.\n"
             "Não invente valores, horários, macros ou medidas ausentes.\n"
+            "Para composição de alimentos, calorias, macros ou TACO, use search_taco_foods, "
+            "get_taco_food ou calculate_taco_food_nutrients. Se o alimento não existir na TACO, "
+            "não invente valores; informe que não encontrou.\n"
+            "Quando a mensagem perguntar sobre dados de paciente, consulte o banco antes de responder: "
+            "use o paciente em foco quando existir; se não existir foco, use search_patient_by_name "
+            "para nomes citados e depois get_patient_profile, get_patient_metrics, "
+            "get_patient_conditions ou get_patient_summary.\n"
+            "Nunca diga que idade, peso, objetivo, condições ou qualquer dado de paciente não consta "
+            "sem antes executar uma tool de busca/leitura real. Se birth_date existir, calcule/retorne "
+            "a idade; não diga que idade não consta.\n"
+            "Em chat profissional geral sem paciente em foco, use tools de leitura para pacientes citados "
+            "pelo nome e tools TACO. A única alteração permitida sem paciente em foco é "
+            "update_patient_birth_date quando o nutricionista citar o paciente pelo nome e informar "
+            "uma data completa. Não crie ou altere dietas, treinos, métricas ou agenda sem paciente em foco.\n"
             "Ações de deletar, cancelar, remover, sobrescrever plano completo ou apagar dados "
             "devem usar request_confirmation com pending_action e pending_payload executaveis, nunca execução direta.\n"
             "Depois de pedir confirmacao uma vez, a proxima confirmacao curta deve executar a pending_action; "
             "nunca peca a mesma confirmacao novamente.\n"
-            "Se a mensagem for pergunta, conversa geral ou ambígua, não chame nenhuma tool.\n\n"
+            "Se a mensagem for conversa geral ou ambígua sem necessidade de dado real, não chame nenhuma tool. "
+            "Perguntas sobre dados de paciente ou TACO exigem tool de leitura antes da resposta.\n\n"
             "Contexto operacional:\n"
             f"{json.dumps(summary, ensure_ascii=False, default=str)}"
         )
@@ -377,6 +503,66 @@ class AiAgentService:
                     intent=intent,
                     message=message,
                 )
+            if tool_name == "search_patient_by_name":
+                return await self._search_patient_by_name(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "get_patient_profile":
+                return await self._get_patient_profile(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "get_patient_metrics":
+                return await self._get_patient_metrics(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "get_patient_conditions":
+                return await self._get_patient_conditions(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "get_patient_summary":
+                return await self._get_patient_summary(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "update_patient_profile":
+                return await self._update_patient_profile(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
             if tool_name == "register_injury":
                 return await self._register_injury(
                     actor=actor,
@@ -419,6 +605,46 @@ class AiAgentService:
                 )
             if tool_name == "add_food_to_meal":
                 return await self._add_food_to_meal(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "search_taco_foods":
+                return await self._search_taco_foods(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "get_taco_food":
+                return await self._get_taco_food(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "calculate_taco_food_nutrients":
+                return await self._calculate_taco_food_nutrients(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                )
+            if tool_name == "add_taco_food_to_meal":
+                return await self._add_taco_food_to_meal(
                     actor=actor,
                     arguments=arguments,
                     chat=chat,
@@ -480,15 +706,22 @@ class AiAgentService:
                     message=message,
                 )
         except Exception as exc:
+            friendly_error = _friendly_tool_error(exc)
+            if settings.app_env == "development":
+                print("Erro técnico em tool:", tool_name, repr(exc))
             return await self._record_action(
                 actor=actor,
                 arguments=arguments,
                 chat=chat,
                 chat_scope=chat_scope,
                 context=context,
-                error=str(exc),
+                error=friendly_error,
                 intent=intent,
                 message=message,
+                result={
+                    "label": "Ação não concluída",
+                    "summary": friendly_error,
+                },
                 status="failed",
                 tool_name=tool_name,
             )
@@ -504,6 +737,556 @@ class AiAgentService:
             message=message,
             status="skipped",
             tool_name=tool_name,
+        )
+
+    async def _patient_lookup_actions(
+        self,
+        *,
+        actor: dict,
+        allowed_tools: set[str],
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+        user_message: str,
+    ) -> list[dict]:
+        if chat_scope != "nutritionist":
+            return []
+
+        raw = user_message.strip()
+        normalized = _normalize(raw)
+        patient = context.get("patient") or {}
+        patient_profile = patient.get("profile") or context.get("profile") or {}
+        focused_patient_id = patient.get("id")
+        detected_name = None if focused_patient_id else self._extract_patient_query(raw, normalized)
+
+        if settings.app_env == "development":
+            print("Mensagem recebida:", user_message)
+            print("Paciente em foco:", focused_patient_id)
+            print("Paciente citado:", detected_name)
+
+        tool_name = self._patient_read_tool_for_request(normalized)
+        if tool_name not in allowed_tools:
+            return []
+
+        if focused_patient_id:
+            return [
+                await self._execute_tool(
+                    actor=actor,
+                    arguments={
+                        "patient_id": focused_patient_id,
+                        "patient_name": patient_profile.get("full_name"),
+                    },
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=intent,
+                    message=message,
+                    tool_name=tool_name,
+                )
+            ]
+
+        if not detected_name or "search_patient_by_name" not in allowed_tools:
+            return []
+
+        actions = [
+            await self._execute_tool(
+                actor=actor,
+                arguments={"query": detected_name},
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                intent=intent,
+                message=message,
+                tool_name="search_patient_by_name",
+            )
+        ]
+        search_result = actions[0].get("result") or {}
+        matches = search_result.get("matches") or []
+        if len(matches) != 1:
+            return actions
+
+        match = matches[0]
+        actions.append(
+            await self._execute_tool(
+                actor=actor,
+                arguments={
+                    "patient_id": match.get("id"),
+                    "patient_name": match.get("full_name") or detected_name,
+                },
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                intent=intent,
+                message=message,
+                tool_name=tool_name,
+            )
+        )
+        return actions
+
+    async def _search_patient_by_name(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        nutritionist_id = self._nutritionist_id_for_tools(actor, context)
+        query = _optional_text(arguments.get("query") or arguments.get("patient_name"))
+        if not query:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Informe o nome do paciente para buscar.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="search_patient_by_name",
+            )
+
+        try:
+            matches = await self.workspace.search_patients_by_name_for_nutritionist(
+                nutritionist_id=nutritionist_id,
+                query=query,
+                limit=_positive_int(arguments.get("limit"), default=10),
+            )
+        except Exception:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não consegui consultar os dados do paciente agora. Tente novamente em instantes.",
+                intent=intent,
+                message=message,
+                status="failed",
+                tool_name="search_patient_by_name",
+            )
+
+        if not matches:
+            summary = f"Não encontrei paciente chamado {query} neste workspace."
+        elif len(matches) > 1:
+            names = ", ".join(match.get("full_name") or "Paciente sem nome" for match in matches[:5])
+            summary = f"Encontrei mais de um paciente chamado {query}: {names}."
+        else:
+            summary = f"Paciente encontrado: {matches[0].get('full_name') or query}."
+
+        result = {
+            "count": len(matches),
+            "label": "Busca de paciente",
+            "matches": matches,
+            "query": query,
+            "summary": summary,
+        }
+        if settings.app_env == "development":
+            print("patient_search_result:", json.dumps(result, ensure_ascii=False, default=str))
+            print("Resultado search_patient_by_name:", json.dumps(result, ensure_ascii=False, default=str))
+
+        return await self._record_action(
+            actor=actor,
+            arguments=arguments,
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result=result,
+            status="executed",
+            tool_name="search_patient_by_name",
+        )
+
+    async def _get_patient_profile(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        nutritionist_id = self._nutritionist_id_for_tools(actor, context)
+        patient_id = await self._resolve_patient_id_for_tools(
+            arguments,
+            context,
+            nutritionist_id=nutritionist_id,
+        )
+        if not patient_id:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não identifiquei qual paciente consultar.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="get_patient_profile",
+            )
+
+        try:
+            profile = await self.workspace.get_patient_profile_for_nutritionist(
+                nutritionist_id=nutritionist_id,
+                patient_id=patient_id,
+            )
+        except Exception:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não consegui consultar os dados do paciente agora. Tente novamente em instantes.",
+                intent=intent,
+                message=message,
+                status="failed",
+                tool_name="get_patient_profile",
+            )
+
+        result = {
+            "label": "Perfil do paciente",
+            "patient": profile,
+            "summary": self._patient_profile_summary(profile),
+        }
+        if settings.app_env == "development":
+            print("Resultado get_patient_profile:", json.dumps(result, ensure_ascii=False, default=str))
+
+        return await self._record_action(
+            actor=actor,
+            arguments={**arguments, "patient_id": patient_id},
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result=result,
+            status="executed",
+            tool_name="get_patient_profile",
+        )
+
+    async def _get_patient_metrics(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        nutritionist_id = self._nutritionist_id_for_tools(actor, context)
+        patient_id = await self._resolve_patient_id_for_tools(
+            arguments,
+            context,
+            nutritionist_id=nutritionist_id,
+        )
+        if not patient_id:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não identifiquei qual paciente consultar.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="get_patient_metrics",
+            )
+
+        try:
+            metrics = await self.workspace.list_patient_metrics_for_nutritionist(
+                nutritionist_id=nutritionist_id,
+                patient_id=patient_id,
+                limit=_positive_int(arguments.get("limit"), default=40),
+            )
+        except Exception:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não consegui consultar os dados do paciente agora. Tente novamente em instantes.",
+                intent=intent,
+                message=message,
+                status="failed",
+                tool_name="get_patient_metrics",
+            )
+
+        result = {
+            "label": "Métricas do paciente",
+            "metrics": metrics,
+            "patient_id": patient_id,
+            "summary": self._patient_metrics_summary(metrics),
+        }
+        return await self._record_action(
+            actor=actor,
+            arguments={**arguments, "patient_id": patient_id},
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result=result,
+            status="executed",
+            tool_name="get_patient_metrics",
+        )
+
+    async def _get_patient_conditions(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        nutritionist_id = self._nutritionist_id_for_tools(actor, context)
+        patient_id = await self._resolve_patient_id_for_tools(
+            arguments,
+            context,
+            nutritionist_id=nutritionist_id,
+        )
+        if not patient_id:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não identifiquei qual paciente consultar.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="get_patient_conditions",
+            )
+
+        try:
+            conditions = await self.workspace.list_patient_conditions_for_nutritionist(
+                nutritionist_id=nutritionist_id,
+                patient_id=patient_id,
+                limit=_positive_int(arguments.get("limit"), default=40),
+            )
+        except Exception:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não consegui consultar os dados do paciente agora. Tente novamente em instantes.",
+                intent=intent,
+                message=message,
+                status="failed",
+                tool_name="get_patient_conditions",
+            )
+
+        result = {
+            "conditions": conditions,
+            "label": "Condições do paciente",
+            "patient_id": patient_id,
+            "summary": self._patient_conditions_summary(conditions),
+        }
+        return await self._record_action(
+            actor=actor,
+            arguments={**arguments, "patient_id": patient_id},
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result=result,
+            status="executed",
+            tool_name="get_patient_conditions",
+        )
+
+    async def _get_patient_summary(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        nutritionist_id = self._nutritionist_id_for_tools(actor, context)
+        patient_id = await self._resolve_patient_id_for_tools(
+            arguments,
+            context,
+            nutritionist_id=nutritionist_id,
+        )
+        if not patient_id:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não identifiquei qual paciente consultar.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="get_patient_summary",
+            )
+
+        try:
+            summary = await self.workspace.get_patient_summary_for_nutritionist(
+                nutritionist_id=nutritionist_id,
+                patient_id=patient_id,
+            )
+        except Exception:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não consegui consultar os dados do paciente agora. Tente novamente em instantes.",
+                intent=intent,
+                message=message,
+                status="failed",
+                tool_name="get_patient_summary",
+            )
+
+        result = {
+            "label": "Resumo do paciente",
+            "patient_id": patient_id,
+            "summary": self._patient_summary_text(summary),
+            "context": summary,
+        }
+        return await self._record_action(
+            actor=actor,
+            arguments={**arguments, "patient_id": patient_id},
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result=result,
+            status="executed",
+            tool_name="get_patient_summary",
+        )
+
+    async def _update_patient_profile(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        if chat_scope != "nutritionist" or not context.get("patient"):
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Atualizações de perfil exigem um paciente em foco.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="update_patient_profile",
+            )
+
+        nutritionist_id = self._nutritionist_id_for_tools(actor, context)
+        patient_id = await self._resolve_patient_id_for_tools(
+            arguments,
+            context,
+            nutritionist_id=nutritionist_id,
+        )
+        allowed_fields = {
+            "birth_date",
+            "full_name",
+            "gender",
+            "is_active",
+            "notes",
+            "objective",
+            "phone",
+        }
+        payload = {
+            key: value
+            for key, value in arguments.items()
+            if key in allowed_fields and value is not None
+        }
+        if "birth_date" in payload:
+            birth_date = _safe_birth_date(payload["birth_date"])
+            if not birth_date:
+                return await self._record_action(
+                    actor=actor,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    error="Data de nascimento inválida.",
+                    intent=intent,
+                    message=message,
+                    status="skipped",
+                    tool_name="update_patient_profile",
+                )
+            payload["birth_date"] = birth_date
+        if not payload:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Nenhum campo permitido foi informado para atualização.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="update_patient_profile",
+            )
+
+        before_state = await self.workspace.get_patient_profile_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+        )
+        updated = await self.workspace.update_patient_profile_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            patient_id=patient_id,
+            payload=payload,
+        )
+        return await self._record_action(
+            actor=actor,
+            arguments={**arguments, "patient_id": patient_id},
+            after_state=updated,
+            before_state=before_state,
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            new_value=payload,
+            old_value=before_state,
+            result={
+                "label": "Perfil do paciente atualizado",
+                "patient": updated,
+                "summary": "Perfil do paciente atualizado com sucesso.",
+            },
+            status="executed",
+            tool_name="update_patient_profile",
         )
 
     async def _request_confirmation(
@@ -654,7 +1437,6 @@ class AiAgentService:
                 tool_name="update_patient_birth_date",
             )
 
-        patient_id = self._patient_id(context)
         nutritionist = context.get("nutritionist") or {}
         nutritionist_id = _optional_text(nutritionist.get("id"))
         if not nutritionist_id:
@@ -670,6 +1452,55 @@ class AiAgentService:
                 status="skipped",
                 tool_name="update_patient_birth_date",
             )
+
+        try:
+            patient_id = await self._resolve_patient_id_for_tools(
+                arguments,
+                context,
+                nutritionist_id=nutritionist_id,
+            )
+        except ValueError as exc:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error=str(exc),
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Paciente não identificado",
+                    "summary": str(exc),
+                },
+                status="skipped",
+                tool_name="update_patient_birth_date",
+            )
+
+        if not patient_id:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Não identifiquei qual paciente atualizar.",
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Paciente não identificado",
+                    "summary": "Informe o nome do paciente que deseja atualizar.",
+                },
+                status="skipped",
+                tool_name="update_patient_birth_date",
+            )
+
+        if settings.app_env == "development":
+            print("chat_scope:", chat_scope)
+            print("patient_id:", patient_id)
+            print("detected_patient_name:", arguments.get("patient_name"))
+            print("intent:", intent)
+            print("payload:", json.dumps(arguments, ensure_ascii=False, default=str))
 
         birth_date = _safe_birth_date(arguments.get("birth_date"))
         birth_year = _birth_year(arguments.get("birth_year"))
@@ -746,6 +1577,8 @@ class AiAgentService:
             nutritionist_id=nutritionist_id,
             patient_id=patient_id,
         )
+        raw_patient_label = _optional_text(arguments.get("patient_name"))
+        patient_label = _title_text(raw_patient_label) if raw_patient_label else "paciente"
         previous_birth_date = _safe_birth_date(before.get("birth_date"))
         state_id = _optional_text(arguments.get("_state_id"))
         if previous_birth_date == birth_date:
@@ -762,7 +1595,10 @@ class AiAgentService:
                 message=message,
                 result={
                     "label": "Data de nascimento ja estava correta",
-                    "summary": f"A data de nascimento ja estava como {_format_date_br(birth_date)}.",
+                    "summary": (
+                        f"A data de nascimento de {patient_label} ja estava como "
+                        f"{_format_date_br(birth_date)}."
+                    ),
                 },
                 status="skipped",
                 tool_name="update_patient_birth_date",
@@ -792,8 +1628,9 @@ class AiAgentService:
                 "label": "Data de nascimento atualizada",
                 "old_birth_date": previous_birth_date,
                 "new_birth_date": birth_date,
+                "patient_name": patient_label,
                 "summary": (
-                    "Data de nascimento atualizada para "
+                    f"Data de nascimento de {patient_label} atualizada com sucesso para "
                     f"{_format_date_br(birth_date)}."
                 ),
             },
@@ -1087,6 +1924,350 @@ class AiAgentService:
             result={"label": "Observacao adicionada", "summary": title},
             status="executed",
             tool_name="add_observation",
+        )
+
+    async def _search_taco_foods(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        query = _optional_text(arguments.get("query") or arguments.get("food_name"))
+        if not query:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Busca TACO sem termo de alimento.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="search_taco_foods",
+            )
+
+        foods = await self.workspace.search_taco_foods(
+            query=query,
+            category=_optional_text(arguments.get("category")),
+            limit=_positive_int(arguments.get("limit"), default=6),
+        )
+        return await self._record_action(
+            actor=actor,
+            after_state=foods,
+            arguments=arguments,
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result={
+                "foods": [_compact_taco_food(food) for food in foods],
+                "label": "Busca TACO",
+                "summary": (
+                    f"{len(foods)} alimento(s) encontrado(s) na TACO para '{query}'."
+                    if foods
+                    else f"Nenhum alimento TACO encontrado para '{query}'."
+                ),
+            },
+            status="executed",
+            tool_name="search_taco_foods",
+        )
+
+    async def _get_taco_food(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        food_id = _optional_text(arguments.get("food_id"))
+        food_name = _optional_text(arguments.get("food_name") or arguments.get("query"))
+        food = await self.workspace.find_taco_food(food_id=food_id, query=food_name)
+        if not food:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Alimento nao encontrado na TACO.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="get_taco_food",
+            )
+
+        return await self._record_action(
+            actor=actor,
+            after_state=food,
+            arguments=arguments,
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result={
+                "food": _compact_taco_food(food),
+                "label": "Alimento TACO",
+                "summary": _taco_food_summary(food),
+            },
+            status="executed",
+            tool_name="get_taco_food",
+        )
+
+    async def _calculate_taco_food_nutrients(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        food_id = _optional_text(arguments.get("food_id"))
+        food_name = _optional_text(arguments.get("food_name") or arguments.get("query"))
+        quantity_g = _quantity_grams(arguments.get("quantity_g") or arguments.get("quantity"))
+        if quantity_g is None:
+            quantity_g = 100
+
+        food = await self.workspace.find_taco_food(food_id=food_id, query=food_name)
+        if not food:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Alimento nao encontrado na TACO.",
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Alimento TACO nao encontrado",
+                    "summary": (
+                        "Nao encontrei esse alimento na TACO. "
+                        "Confirme o nome ou cadastre um alimento personalizado."
+                    ),
+                },
+                status="skipped",
+                tool_name="calculate_taco_food_nutrients",
+            )
+
+        nutrients = _calculate_taco_nutrients(food, quantity_g)
+        return await self._record_action(
+            actor=actor,
+            after_state={"food": food, "nutrients": nutrients},
+            arguments={**arguments, "quantity_g": quantity_g},
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result={
+                "food": _compact_taco_food(food),
+                "label": "Calculo TACO",
+                "nutrients": nutrients,
+                "quantity_g": quantity_g,
+                "summary": _nutrient_summary(food, nutrients, quantity_g),
+            },
+            status="executed",
+            tool_name="calculate_taco_food_nutrients",
+        )
+
+    async def _add_taco_food_to_meal(
+        self,
+        *,
+        actor: dict,
+        arguments: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        intent: str,
+        message: dict,
+    ) -> dict:
+        if chat_scope != "nutritionist" or not context.get("patient"):
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Adicionar alimento em refeicao exige paciente em foco.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="add_taco_food_to_meal",
+            )
+
+        meal_name = _optional_text(arguments.get("meal_name"))
+        quantity_g = _quantity_grams(arguments.get("quantity_g") or arguments.get("quantity"))
+        food_id = _optional_text(arguments.get("food_id"))
+        food_name = _optional_text(arguments.get("food_name") or arguments.get("query"))
+        if not meal_name or quantity_g is None or not (food_id or food_name):
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Dados insuficientes para adicionar alimento TACO.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="add_taco_food_to_meal",
+            )
+
+        food = await self.workspace.find_taco_food(food_id=food_id, query=food_name)
+        if not food:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Alimento nao encontrado na TACO.",
+                intent=intent,
+                message=message,
+                result={
+                    "label": "Alimento TACO nao encontrado",
+                    "summary": (
+                        "Nao encontrei esse alimento na TACO. "
+                        "Confirme o nome ou cadastre um alimento personalizado."
+                    ),
+                },
+                status="skipped",
+                tool_name="add_taco_food_to_meal",
+            )
+
+        diet = await self.workspace.get_active_diet_with_meals(self._patient_id(context))
+        if not diet:
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Paciente sem dieta ativa.",
+                intent=intent,
+                message=message,
+                status="skipped",
+                tool_name="add_taco_food_to_meal",
+            )
+
+        normalized_target = _normalize(meal_name)
+        meal = next(
+            (
+                item
+                for item in diet.get("meals", [])
+                if normalized_target in _normalize(item.get("meal_name", ""))
+                or _normalize(item.get("meal_name", "")) in normalized_target
+            ),
+            None,
+        )
+        nutrients = _calculate_taco_nutrients(food, quantity_g)
+        food_item = {
+            "carbohydrate_g": nutrients["carbohydrate_g"],
+            "energy_kcal": nutrients["energy_kcal"],
+            "fiber_g": nutrients["fiber_g"],
+            "lipid_g": nutrients["lipid_g"],
+            "name": food["name"],
+            "protein_g": nutrients["protein_g"],
+            "quantity": f"{_format_number(quantity_g)}g",
+            "quantity_g": quantity_g,
+            "sodium_mg": nutrients["sodium_mg"],
+            "taco_food_id": food["id"],
+        }
+
+        if meal:
+            foods = list(meal.get("foods") or [])
+            foods.append(food_item)
+            updated_meal = await self.workspace.update_diet_meal_foods(
+                meal_id=meal["id"],
+                foods=foods,
+            )
+        else:
+            updated_meal = await self.workspace.create_diet_meal_record(
+                diet_id=diet["id"],
+                meal_name=meal_name,
+                foods=[food_item],
+            )
+            foods = [food_item]
+
+        created_item = await self.workspace.create_diet_meal_item(
+            meal_id=updated_meal["id"],
+            taco_food_id=food["id"],
+            custom_food_name=None,
+            quantity_g=quantity_g,
+            nutrients=nutrients,
+        )
+
+        next_meals = []
+        replaced = False
+        for current_meal in diet.get("meals", []):
+            if current_meal.get("id") == updated_meal.get("id"):
+                replaced = True
+                existing_items = list(current_meal.get("items") or [])
+                next_meals.append(
+                    {
+                        **current_meal,
+                        "foods": foods,
+                        "items": existing_items + [created_item],
+                    }
+                )
+            else:
+                next_meals.append(current_meal)
+        if not replaced:
+            next_meals.append({**updated_meal, "items": [created_item]})
+
+        totals = _diet_totals(next_meals)
+        updated_diet = await self.workspace.update_diet_macro_totals(
+            diet_id=diet["id"],
+            payload={
+                "calories": round(totals["energy_kcal"]),
+                "protein": totals["protein_g"],
+                "carbs": totals["carbohydrate_g"],
+                "fats": totals["lipid_g"],
+            },
+        )
+
+        return await self._record_action(
+            actor=actor,
+            after_state={
+                "diet": updated_diet,
+                "food": food,
+                "meal": updated_meal,
+                "meal_item": created_item,
+            },
+            arguments={**arguments, "food_id": food["id"], "quantity_g": quantity_g},
+            before_state={"diet": diet, "meal": meal},
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=intent,
+            message=message,
+            result={
+                "food": _compact_taco_food(food),
+                "label": "Alimento TACO adicionado",
+                "nutrients": nutrients,
+                "quantity_g": quantity_g,
+                "summary": (
+                    f"{_format_number(quantity_g)}g de {food['name']} adicionados "
+                    f"em {updated_meal.get('meal_name')} com valores da TACO."
+                ),
+            },
+            status="executed",
+            tool_name="add_taco_food_to_meal",
         )
 
     async def _add_food_to_meal(
@@ -1604,7 +2785,7 @@ class AiAgentService:
             "actor_user_id": actor["id"],
             "user_id": actor["id"],
             "actor_role": actor["role"],
-            "patient_id": self._patient_id(context),
+            "patient_id": (context.get("patient") or {}).get("id") or clean_arguments.get("patient_id"),
             "nutritionist_id": (context.get("nutritionist") or {}).get("id"),
             "chat_scope": chat_scope,
             "chat_id": chat["id"],
@@ -1643,7 +2824,80 @@ class AiAgentService:
         }
 
     def _patient_id(self, context: dict) -> str:
-        return context["patient"]["id"]
+        patient = context.get("patient") or {}
+        return str(patient.get("id") or "")
+
+    def _nutritionist_id_for_tools(self, actor: dict, context: dict) -> str:
+        if actor.get("role") != "nutritionist":
+            raise ValueError("Apenas nutricionistas podem consultar dados de pacientes.")
+
+        nutritionist_id = (context.get("nutritionist") or {}).get("id")
+        if not nutritionist_id:
+            raise ValueError("Cadastro de nutricionista nao encontrado no contexto.")
+        return nutritionist_id
+
+    async def _resolve_patient_id_for_tools(
+        self,
+        arguments: dict,
+        context: dict,
+        *,
+        nutritionist_id: str,
+    ) -> str | None:
+        patient_id = arguments.get("patient_id")
+        if patient_id:
+            return str(patient_id)
+
+        focused_patient_id = (context.get("patient") or {}).get("id")
+        if focused_patient_id:
+            return str(focused_patient_id)
+
+        patient_name = _optional_text(
+            arguments.get("patient_name")
+            or arguments.get("query")
+            or arguments.get("name")
+        )
+        if not patient_name:
+            return None
+
+        matches = await self.workspace.search_patients_by_name_for_nutritionist(
+            nutritionist_id=nutritionist_id,
+            query=patient_name,
+            limit=5,
+        )
+        if settings.app_env == "development":
+            print(
+                "patient_search_result:",
+                json.dumps(
+                    {
+                        "count": len(matches),
+                        "matches": matches,
+                        "query": patient_name,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+            print(
+                "Resultado search_patient_by_name:",
+                json.dumps(
+                    {
+                        "count": len(matches),
+                        "matches": matches,
+                        "query": patient_name,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        if len(matches) == 1:
+            return str(matches[0]["id"])
+        if len(matches) > 1:
+            names = ", ".join(match.get("full_name") or "Paciente sem nome" for match in matches)
+            raise ValueError(
+                f"Encontrei mais de um paciente chamado {patient_name}: {names}. "
+                "Pergunte qual paciente usar."
+            )
+        raise ValueError(f"Não encontrei nenhum paciente chamado {patient_name} no seu cadastro.")
 
     def _patient_name_mismatch(self, context: dict, patient_name: Any) -> bool:
         if not patient_name:
@@ -1661,7 +2915,149 @@ class AiAgentService:
     def _patient_id_mismatch(self, context: dict, patient_id: Any) -> bool:
         if not patient_id:
             return False
+        if not context.get("patient"):
+            return False
         return str(patient_id) != self._patient_id(context)
+
+    def _patient_read_tool_for_request(self, normalized: str) -> str:
+        if any(term in normalized for term in ("resumo", "resuma", "sumario", "prontuario", "dados do paciente")):
+            return "get_patient_summary"
+        if any(term in normalized for term in ("condicao", "condicoes", "clinica", "clinicas", "alergia", "restricao")):
+            return "get_patient_conditions"
+        if any(term in normalized for term in ("peso", "altura", "metrica", "metricas", "medida", "medidas")):
+            return "get_patient_metrics"
+        return "get_patient_profile"
+
+    def _looks_like_patient_data_request(self, normalized: str) -> bool:
+        if any(
+            term in normalized
+            for term in (
+                "cadastrar",
+                "cadastre",
+                "criar",
+                "crie",
+                "registrar",
+                "registre",
+                "salvar",
+                "salve",
+                "atualizar",
+                "atualize",
+                "alterar",
+                "altere",
+            )
+        ):
+            return False
+
+        return any(
+            term in normalized
+            for term in (
+                "anos",
+                "idade",
+                "nascimento",
+                "nasceu",
+                "peso",
+                "altura",
+                "objetivo",
+                "observacoes",
+                "observacao",
+                "condicoes",
+                "condicao",
+                "resumo",
+                "resuma",
+                "prontuario",
+                "dados",
+                "metricas",
+                "metrica",
+            )
+        )
+
+    def _extract_patient_query(self, raw: str, normalized: str) -> str | None:
+        patterns = (
+            r"\bpaciente\s+(?P<name>[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ'\-]*(?:\s+[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ'\-]*){0,4})",
+            r"\b(?:do|da|de)\s+(?P<name>[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ'\-]*(?:\s+[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ'\-]*){0,4})",
+            r"\b(?:o|a)\s+(?P<name>[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ'\-]*(?:\s+[a-zA-ZÀ-ÿ][a-zA-ZÀ-ÿ'\-]*){0,4})",
+        )
+        for pattern in patterns:
+            for match in re.finditer(pattern, raw, flags=re.IGNORECASE):
+                candidate = self._trim_patient_query(match.group("name"))
+                if candidate:
+                    return candidate
+
+        words = [
+            word
+            for word in re.findall(r"[a-z0-9]+", normalized)
+            if word not in PATIENT_QUERY_STOPWORDS and not word.isdigit()
+        ]
+        if 1 <= len(words) <= 4:
+            return " ".join(words)
+        return None
+
+    def _trim_patient_query(self, value: str) -> str | None:
+        words = re.findall(r"[a-z0-9]+", _normalize(value))
+        cleaned: list[str] = []
+        for word in words:
+            if word in PATIENT_QUERY_STOPWORDS:
+                break
+            cleaned.append(word)
+        return " ".join(cleaned) or None
+
+    def _patient_profile_summary(self, profile: dict) -> str:
+        name = profile.get("full_name") or "Paciente"
+        birth_date = profile.get("birth_date")
+        age = profile.get("age")
+        if age is not None and birth_date:
+            return (
+                f"{name} tem {age} anos, considerando a data de nascimento "
+                f"cadastrada: {_format_date_br(str(birth_date))}."
+            )
+        if not birth_date:
+            return f"Não encontrei data de nascimento cadastrada para {name}."
+        return f"Perfil de {name} consultado com sucesso."
+
+    def _patient_metrics_summary(self, metrics: dict) -> str:
+        latest_weight = metrics.get("latest_weight")
+        if latest_weight:
+            unit = latest_weight.get("unit") or ""
+            recorded_at = latest_weight.get("recorded_at") or latest_weight.get("created_at")
+            return (
+                "Peso atual encontrado: "
+                f"{latest_weight.get('value')} {unit}".strip()
+                + (f" em {recorded_at}." if recorded_at else ".")
+            )
+        variable_count = len(metrics.get("variable_metrics") or [])
+        main_count = len(metrics.get("main_metrics") or [])
+        if variable_count or main_count:
+            return f"Encontrei {variable_count + main_count} métricas cadastradas para o paciente."
+        return "Não encontrei métricas cadastradas para esse paciente."
+
+    def _patient_conditions_summary(self, conditions: list[dict]) -> str:
+        if not conditions:
+            return "Não encontrei condições clínicas cadastradas para esse paciente."
+        titles = [
+            condition.get("title")
+            or condition.get("description")
+            or condition.get("condition_type")
+            or "condição"
+            for condition in conditions[:5]
+        ]
+        return f"Condições encontradas: {', '.join(titles)}."
+
+    def _patient_summary_text(self, payload: dict) -> str:
+        profile = payload.get("profile") or {}
+        metrics = payload.get("metrics") or {}
+        conditions = payload.get("conditions") or []
+        diets = payload.get("diets") or []
+        workouts = payload.get("workouts") or []
+        appointments = payload.get("appointments") or []
+        parts = [
+            self._patient_profile_summary(profile),
+            self._patient_metrics_summary(metrics),
+            self._patient_conditions_summary(conditions),
+            f"Dietas cadastradas: {len(diets)}.",
+            f"Treinos cadastrados: {len(workouts)}.",
+            f"Agendamentos cadastrados: {len(appointments)}.",
+        ]
+        return " ".join(parts)
 
     def _classify_intent(self, user_message: str, *, has_pending_state: bool) -> str:
         normalized = _normalize(user_message)
@@ -1692,6 +3088,10 @@ class AiAgentService:
         if any(term in normalized for term in ("refeicao", "cafe da manha", "almoco", "jantar", "lanche", "ceia")):
             if any(term in normalized for term in ("adicionar", "adicione", "colocar", "coloque")):
                 return "add_food_to_meal"
+        if self._looks_like_taco_request(normalized):
+            return "taco_lookup"
+        if self._looks_like_patient_data_request(normalized):
+            return "patient_lookup"
         if any(term in normalized for term in ("lesao", "lesion", "machuc", "contus", "distens")):
             if any(term in normalized for term in ("cadastr", "registr", "adicion", "criar", "nova", "novo")):
                 return "create_injury"
@@ -1866,9 +3266,28 @@ class AiAgentService:
             intent == "add_food_to_meal"
             and chat_scope == "nutritionist"
             and food
+            and "add_taco_food_to_meal" in allowed_tools
+        ):
+            quantity_g = _quantity_grams(food.get("quantity"))
+            if quantity_g is not None:
+                return "add_taco_food_to_meal", {
+                    **food,
+                    "quantity_g": quantity_g,
+                }
+        if (
+            intent == "add_food_to_meal"
+            and chat_scope == "nutritionist"
+            and food
             and "add_food_to_meal" in allowed_tools
         ):
             return "add_food_to_meal", food
+
+        taco = self._fallback_taco(raw, normalized)
+        if intent == "taco_lookup" and taco:
+            if taco.get("quantity_g") and "calculate_taco_food_nutrients" in allowed_tools:
+                return "calculate_taco_food_nutrients", taco
+            if "search_taco_foods" in allowed_tools:
+                return "search_taco_foods", taco
 
         birth_date = self._fallback_birth_date(raw, normalized, context)
         if (
@@ -1890,6 +3309,8 @@ class AiAgentService:
                 "adicione",
                 "alterar",
                 "atualizar",
+                "caloria",
+                "calorias",
                 "cadastrar",
                 "cadastre",
                 "cancelar",
@@ -1909,16 +3330,44 @@ class AiAgentService:
                 "montar",
                 "perdi",
                 "plano",
+                "proteina",
+                "proteinas",
                 "registrar",
                 "registre",
                 "remover",
                 "reagendar",
                 "salvar",
                 "tabela",
+                "taco",
                 "treino",
                 "treinos",
             )
         )
+
+    def _looks_like_taco_request(self, normalized: str) -> bool:
+        if "taco" in normalized or "tabela brasileira" in normalized:
+            return True
+        has_quantity = bool(re.search(r"\b\d+(?:[,.]\d+)?\s*(?:g|gramas|kg)\b", normalized))
+        has_nutrient = any(
+            term in normalized
+            for term in (
+                "caloria",
+                "calorias",
+                "kcal",
+                "macro",
+                "macros",
+                "nutriente",
+                "nutrientes",
+                "proteina",
+                "proteinas",
+                "carboidrato",
+                "carboidratos",
+                "gordura",
+                "fibra",
+                "sodio",
+            )
+        )
+        return has_quantity and has_nutrient
 
     def _fallback_injury(
         self,
@@ -2030,6 +3479,39 @@ class AiAgentService:
             "quantity": match.group("quantity"),
         }
 
+    def _fallback_taco(self, raw: str, normalized: str) -> dict | None:
+        quantity = _quantity_grams(raw)
+        food_name: str | None = None
+
+        patterns = (
+            r"(?:de|do|da)\s+(?P<food>[a-z0-9ãõáéíóúâêôç\s,-]+?)(?:\s+segundo|\s+na\s+taco|\s+pela\s+taco|\?|$)",
+            r"taco\s+(?P<food>[a-z0-9ãõáéíóúâêôç\s,-]+)$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match:
+                food_name = match.group("food")
+                break
+
+        if not food_name:
+            cleaned = re.sub(
+                r"\b(?:quantas?|calorias?|kcal|tem|possui|segundo|taco|tabela|brasileira|"
+                r"composicao|nutricional|nutrientes?|macros?|proteinas?|carboidratos?|"
+                r"gorduras?|fibra|sodio|em|de|do|da|para|por|100g)\b",
+                " ",
+                normalized,
+            )
+            cleaned = re.sub(r"\b\d+(?:[,.]\d+)?\s*(?:g|gramas|kg)\b", " ", cleaned)
+            food_name = " ".join(cleaned.split())
+
+        if not food_name:
+            return None
+
+        payload: dict[str, Any] = {"query": food_name.strip()}
+        if quantity is not None:
+            payload["quantity_g"] = quantity
+        return payload
+
     def _fallback_birth_date(
         self,
         raw: str,
@@ -2039,13 +3521,21 @@ class AiAgentService:
         if not self._looks_like_birth_date_update(normalized):
             return None
 
+        patient_id = self._patient_id(context) or None
+        patient_name = (
+            self._extract_patient_name(context, normalized)
+            or self._extract_patient_query(raw, normalized)
+        )
+
         full_date = _extract_birth_date(raw)
         if full_date:
-            return {
+            payload: dict[str, Any] = {
                 "birth_date": full_date,
-                "patient_id": self._patient_id(context),
-                "patient_name": self._extract_patient_name(context, normalized),
+                "patient_name": patient_name,
             }
+            if patient_id:
+                payload["patient_id"] = patient_id
+            return payload
 
         birth_year = _extract_birth_year(normalized)
         if birth_year is None:
@@ -2060,18 +3550,22 @@ class AiAgentService:
                 current_date.day,
             )
             if birth_date:
-                return {
+                payload = {
                     "birth_date": birth_date,
                     "birth_year": birth_year,
-                    "patient_id": self._patient_id(context),
-                    "patient_name": self._extract_patient_name(context, normalized),
+                    "patient_name": patient_name,
                 }
+                if patient_id:
+                    payload["patient_id"] = patient_id
+                return payload
 
-        return {
+        payload = {
             "birth_year": birth_year,
-            "patient_id": self._patient_id(context),
-            "patient_name": self._extract_patient_name(context, normalized),
+            "patient_name": patient_name,
         }
+        if patient_id:
+            payload["patient_id"] = patient_id
+        return payload
 
     def _looks_like_birth_date_update(self, normalized: str) -> bool:
         has_birth_term = any(
@@ -2302,6 +3796,156 @@ def _object_payload(value: Any) -> dict:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _friendly_tool_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message.startswith("Não encontrei nenhum paciente chamado"):
+        return message
+    if message.startswith("Encontrei mais de um paciente chamado"):
+        return message
+    if message.startswith("Não identifiquei qual paciente"):
+        return message
+    return "Não foi possível concluir esta ação agora. Tente novamente em instantes."
+
+
+def _calculate_taco_nutrients(food: dict, quantity_g: float) -> dict[str, float]:
+    factor = quantity_g / 100
+    return {
+        "carbohydrate_g": _round_nutrient(food.get("carbohydrate_g"), factor),
+        "energy_kcal": _round_nutrient(food.get("energy_kcal"), factor),
+        "fiber_g": _round_nutrient(food.get("fiber_g"), factor),
+        "lipid_g": _round_nutrient(food.get("lipid_g"), factor),
+        "protein_g": _round_nutrient(food.get("protein_g"), factor),
+        "sodium_mg": _round_nutrient(food.get("sodium_mg"), factor),
+    }
+
+
+def _round_nutrient(value: Any, factor: float) -> float:
+    number = _number(value) or 0
+    return round(number * factor, 2)
+
+
+def _compact_taco_food(food: dict) -> dict:
+    return {
+        "id": food.get("id"),
+        "code": food.get("code"),
+        "name": food.get("name"),
+        "category": food.get("category"),
+        "energy_kcal": food.get("energy_kcal"),
+        "protein_g": food.get("protein_g"),
+        "carbohydrate_g": food.get("carbohydrate_g"),
+        "lipid_g": food.get("lipid_g"),
+        "fiber_g": food.get("fiber_g"),
+        "sodium_mg": food.get("sodium_mg"),
+    }
+
+
+def _taco_food_summary(food: dict) -> str:
+    return (
+        f"{food.get('name')} por 100g: "
+        f"{_format_optional_number(food.get('energy_kcal'))} kcal, "
+        f"{_format_optional_number(food.get('protein_g'))}g proteinas, "
+        f"{_format_optional_number(food.get('carbohydrate_g'))}g carboidratos, "
+        f"{_format_optional_number(food.get('lipid_g'))}g lipidios."
+    )
+
+
+def _nutrient_summary(food: dict, nutrients: dict, quantity_g: float) -> str:
+    return (
+        f"{_format_number(quantity_g)}g de {food.get('name')} segundo a TACO: "
+        f"{_format_optional_number(nutrients.get('energy_kcal'))} kcal, "
+        f"{_format_optional_number(nutrients.get('protein_g'))}g proteinas, "
+        f"{_format_optional_number(nutrients.get('carbohydrate_g'))}g carboidratos, "
+        f"{_format_optional_number(nutrients.get('lipid_g'))}g lipidios, "
+        f"{_format_optional_number(nutrients.get('fiber_g'))}g fibras."
+    )
+
+
+def _quantity_grams(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        number = float(value)
+        return number if number > 0 else None
+
+    text = str(value).lower().replace(",", ".")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*(kg|quilo|quilos|g|gramas)?", text)
+    if not match:
+        return None
+
+    amount = _number(match.group(1))
+    if amount is None or amount <= 0:
+        return None
+    unit = match.group(2) or "g"
+    return amount * 1000 if unit in {"kg", "quilo", "quilos"} else amount
+
+
+def _diet_totals(meals: list[dict]) -> dict[str, float]:
+    totals = {
+        "carbohydrate_g": 0.0,
+        "energy_kcal": 0.0,
+        "fiber_g": 0.0,
+        "lipid_g": 0.0,
+        "protein_g": 0.0,
+        "sodium_mg": 0.0,
+    }
+    for meal in meals:
+        meal_totals = _meal_totals(meal)
+        for key, value in meal_totals.items():
+            totals[key] = round(totals[key] + value, 2)
+    return totals
+
+
+def _meal_totals(meal: dict) -> dict[str, float]:
+    item_totals = {
+        "carbohydrate_g": 0.0,
+        "energy_kcal": 0.0,
+        "fiber_g": 0.0,
+        "lipid_g": 0.0,
+        "protein_g": 0.0,
+        "sodium_mg": 0.0,
+    }
+    for item in meal.get("items") or []:
+        item_totals["carbohydrate_g"] += _number(item.get("carbohydrate_g")) or 0
+        item_totals["energy_kcal"] += _number(item.get("energy_kcal")) or 0
+        item_totals["fiber_g"] += _number(item.get("fiber_g")) or 0
+        item_totals["lipid_g"] += _number(item.get("lipid_g")) or 0
+        item_totals["protein_g"] += _number(item.get("protein_g")) or 0
+        item_totals["sodium_mg"] += _number(item.get("sodium_mg")) or 0
+
+    if any(value > 0 for value in item_totals.values()):
+        return {key: round(value, 2) for key, value in item_totals.items()}
+
+    food_totals = {
+        "carbohydrate_g": 0.0,
+        "energy_kcal": 0.0,
+        "fiber_g": 0.0,
+        "lipid_g": 0.0,
+        "protein_g": 0.0,
+        "sodium_mg": 0.0,
+    }
+    for food in meal.get("foods") or []:
+        food_totals["carbohydrate_g"] += (
+            _number(food.get("carbohydrate_g")) or _number(food.get("carbs_g")) or 0
+        )
+        food_totals["energy_kcal"] += (
+            _number(food.get("energy_kcal")) or _number(food.get("calories")) or 0
+        )
+        food_totals["fiber_g"] += _number(food.get("fiber_g")) or 0
+        food_totals["lipid_g"] += (
+            _number(food.get("lipid_g")) or _number(food.get("fats_g")) or 0
+        )
+        food_totals["protein_g"] += _number(food.get("protein_g")) or 0
+        food_totals["sodium_mg"] += _number(food.get("sodium_mg")) or 0
+    return {key: round(value, 2) for key, value in food_totals.items()}
+
+
+def _format_optional_number(value: Any) -> str:
+    number = _number(value)
+    if number is None:
+        return "-"
+    return _format_number(number)
 
 
 def _format_number(value: float) -> str:
@@ -2587,6 +4231,114 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_patient_by_name",
+            "description": (
+                "Busca pacientes reais do nutricionista por nome completo, primeiro nome "
+                "ou busca parcial sem diferenciar maiúsculas, minúsculas ou acentos. "
+                "Use antes de afirmar que um paciente citado não existe."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_patient_profile",
+            "description": (
+                "Lê o cadastro real de um paciente do nutricionista e retorna nome, gênero, "
+                "data de nascimento, idade calculada, altura quando houver métrica, objetivo "
+                "e observações. Use para perguntas sobre idade, nascimento, objetivo ou perfil."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_patient_metrics",
+            "description": "Consulta métricas reais do paciente, incluindo peso atual quando cadastrado.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_patient_conditions",
+            "description": "Consulta condições clínicas, alergias, restrições, lesões e observações clínicas cadastradas do paciente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_patient_summary",
+            "description": (
+                "Consulta um resumo operacional real do paciente com cadastro, idade calculada, "
+                "métricas recentes, condições, dietas, treinos e agenda."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_id": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_patient_profile",
+            "description": (
+                "Atualiza campos simples do perfil do paciente em foco. Use somente com paciente "
+                "em foco e quando a alteração estiver clara."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "birth_date": {"type": "string"},
+                    "full_name": {"type": "string"},
+                    "gender": {"type": "string"},
+                    "is_active": {"type": "boolean"},
+                    "notes": {"type": "string"},
+                    "objective": {"type": "string"},
+                    "patient_id": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                    "phone": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "register_injury",
             "description": (
                 "Registra uma lesao, dor localizada ou problema fisico como condicao "
@@ -2697,6 +4449,71 @@ AGENT_TOOLS = [
                     "fats_g": {"type": "number"},
                 },
                 "required": ["meal_name", "food_name", "quantity"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_taco_foods",
+            "description": "Busca alimentos reais na Tabela Brasileira de Composição de Alimentos (TACO). Use antes de responder sobre alimento da TACO.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "category": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_taco_food",
+            "description": "Obtém a composição por 100g de um alimento da TACO por ID ou por nome aproximado.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "food_id": {"type": "string"},
+                    "food_name": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate_taco_food_nutrients",
+            "description": "Calcula nutrientes de um alimento TACO para uma quantidade em gramas. Não use valores inventados.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "food_id": {"type": "string"},
+                    "food_name": {"type": "string"},
+                    "quantity_g": {"type": "number"},
+                    "quantity": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_taco_food_to_meal",
+            "description": "Adiciona um alimento da TACO a uma refeição da dieta ativa do paciente em foco e calcula macros automaticamente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "food_id": {"type": "string"},
+                    "food_name": {"type": "string"},
+                    "meal_name": {"type": "string"},
+                    "patient_name": {"type": "string"},
+                    "quantity_g": {"type": "number"},
+                    "quantity": {"type": "string"},
+                },
+                "required": ["meal_name"],
             },
         },
     },

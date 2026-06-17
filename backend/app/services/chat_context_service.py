@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from .openai_service import OpenAIChatService
-from .supabase_workspace_service import SupabaseWorkspaceService
+from .supabase_workspace_service import SupabaseWorkspaceService, calculate_age
 
 
 MEMORY_CHAT_LIMIT = 10
@@ -84,6 +84,7 @@ class ChatContextService:
             nutritionist["id"],
             patient["id"],
             chat_id,
+            chat_scope="patient",
         )
         return context, chat, "nutritionist"
 
@@ -99,6 +100,7 @@ class ChatContextService:
             nutritionist["id"],
             None,
             chat_id,
+            chat_scope="general",
         )
 
         context = {
@@ -122,6 +124,13 @@ class ChatContextService:
                         "objective": patient.get("objective"),
                     }
                     for patient in workspace.get("patients", [])[:8]
+                ],
+                "patients_index": [
+                    {
+                        "id": patient.get("id"),
+                        "full_name": (patient.get("profile") or {}).get("full_name"),
+                    }
+                    for patient in workspace.get("patients", [])[:80]
                 ],
             },
             "main_metrics": [],
@@ -338,6 +347,8 @@ class ChatContextService:
                 "paciente": {
                     "nome": profile.get("full_name"),
                     "objetivo": patient.get("objective"),
+                    "nascimento": patient.get("birth_date"),
+                    "idade": calculate_age(patient.get("birth_date")),
                 },
                 "nivel_de_inteligencia": settings["label"],
                 "dieta_ativa": active_diet,
@@ -391,15 +402,27 @@ class ChatContextService:
 
             return (
                 "Voce e a IA profissional geral do nutricionista dentro do Star Nutri.\n\n"
-                "Este modo nao esta focado em um paciente especifico.\n"
+                "Este modo nao tem paciente em foco, mas voce esta integrado ao agente "
+                "operacional do backend e pode consultar pacientes reais quando o usuario "
+                "citar um nome.\n"
                 "Use-o para raciocinio clinico geral, ideias de acompanhamento, "
                 "organizacao do consultorio, rascunhos de orientacoes, materiais "
                 "educativos e apoio operacional de baixo risco.\n\n"
                 "Limites obrigatorios:\n"
                 "- Nao invente dados de pacientes.\n"
                 "- Nao afirme que existe um prontuario em foco.\n"
-                "- Nao execute alteracoes em prontuario, dieta, treino, metricas ou agenda.\n"
-                "- Se o pedido depender de um paciente especifico, oriente selecionar o paciente no topo.\n\n"
+                "- Nao execute alteracoes em dieta, treino, metricas ou agenda.\n"
+                "- A unica alteracao simples permitida neste modo e corrigir data de nascimento "
+                "quando o paciente for identificado pelo nome e a data completa for informada.\n"
+                "- Se o pedido mencionar um paciente pelo nome, use somente dados retornados "
+                "pelas acoes search_patient_by_name/get_patient_profile/get_patient_metrics/"
+                "get_patient_conditions/get_patient_summary.\n"
+                "- Nunca diga que um dado de paciente nao consta sem uma busca/leitura real "
+                "registrada nas acoes operacionais desta resposta.\n"
+                "- Nao oriente o nutricionista a verificar manualmente algo que a tool ja consultou.\n"
+                "- Para composicao de alimentos, use os resultados reais da TACO quando uma tool TACO for executada.\n"
+                "- Se a TACO nao encontrar o alimento, nao invente valores nutricionais.\n"
+                "- Se nao houver paciente em foco e nenhum nome identificavel for citado, peca o nome do paciente.\n\n"
                 "Nivel de raciocinio solicitado:\n"
                 f"{settings['label']} - {settings['instruction']}\n\n"
                 "Contexto geral do workspace:\n"
@@ -421,6 +444,7 @@ class ChatContextService:
                 "observacoes": patient.get("notes"),
                 "genero": patient.get("gender"),
                 "nascimento": patient.get("birth_date"),
+                "idade": calculate_age(patient.get("birth_date")),
             },
             "nivel_de_inteligencia": settings["label"],
             "condicoes_clinicas": context["conditions"][: settings["condition_limit"]],
@@ -449,6 +473,12 @@ class ChatContextService:
             "- Voce pode sugerir rascunhos de planos e acompanhamentos para revisao do nutricionista.\n"
             "- Voce NAO promete resultados.\n"
             "- Voce sempre considera os dados reais cadastrados.\n"
+            "- Nunca diga que idade, peso, objetivo, condicoes ou dados de cadastro nao constam "
+            "sem que uma busca/leitura real tenha sido executada pelo backend.\n"
+            "- Se birth_date estiver cadastrada, use a idade calculada do contexto.\n"
+            "- Nao oriente o nutricionista a verificar manualmente algo que voce consegue consultar.\n"
+            "- Para alimentos existentes na TACO, use valores reais da TACO e nao invente macros.\n"
+            "- Se a TACO nao encontrar o alimento, peca confirmacao para alimento personalizado.\n"
             "- Voce responde com seguranca, clareza e responsabilidade.\n"
             "- Quando houver risco a saude, oriente procurar atendimento profissional.\n\n"
             "Nivel de raciocinio solicitado:\n"
