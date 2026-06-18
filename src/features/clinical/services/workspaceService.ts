@@ -10,6 +10,7 @@ import type {
 export type NutritionistProfileForm = {
   bio?: string | null
   clinic_name?: string | null
+  default_patient_trial_days?: number | null
   image?: File | null
   phone?: string | null
   professional_name?: string | null
@@ -35,6 +36,9 @@ export async function updateNutritionistProfile(
   const formData = new FormData()
   formData.set('professional_name', payload.professional_name ?? '')
   formData.set('clinic_name', payload.clinic_name ?? '')
+  if (payload.default_patient_trial_days) {
+    formData.set('default_patient_trial_days', String(payload.default_patient_trial_days))
+  }
   formData.set('phone', payload.phone ?? '')
   formData.set('bio', payload.bio ?? '')
   formData.set('remove_image', payload.remove_image ? 'true' : 'false')
@@ -95,6 +99,20 @@ export function updateNutritionistPatient(
     {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function activateNutritionistPatient(
+  patientId: string,
+  session: Session | null,
+) {
+  return apiRequest<PatientContext['patient']>(
+    `/api/nutritionists/patients/${patientId}/activate`,
+    session,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
     },
   )
 }

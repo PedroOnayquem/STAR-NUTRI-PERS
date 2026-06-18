@@ -1,5 +1,6 @@
 import httpx
 from fastapi import HTTPException, status
+from datetime import UTC, datetime, timedelta
 
 from ..core.config import settings
 from ..schemas.patients import CreatePatientRequest
@@ -126,6 +127,10 @@ class SupabaseUserService:
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
+                trial_days = await self._get_nutritionist_trial_days(client, nutritionist_id)
+                trial_started_at = datetime.now(UTC)
+                trial_ends_at = trial_started_at + timedelta(days=trial_days)
+
                 auth_response = await client.post(
                     f"{self.supabase_url}/auth/v1/admin/users",
                     headers=self.service_headers,
@@ -167,6 +172,21 @@ class SupabaseUserService:
                     await self._delete_auth_user(client, created_user_id)
                     self._raise_supabase_error(profile_response)
 
+                patient_payload = {
+                    "user_id": created_user_id,
+                    "nutritionist_id": nutritionist_id,
+                    "birth_date": payload.birth_date.isoformat()
+                    if payload.birth_date
+                    else None,
+                    "gender": payload.gender,
+                    "objective": payload.objective,
+                    "notes": payload.notes,
+                    "is_active": True,
+                    "access_status": "TRIAL",
+                    "trial_days": trial_days,
+                    "trial_started_at": trial_started_at.isoformat(),
+                    "trial_ends_at": trial_ends_at.isoformat(),
+                }
                 patient_response = await client.post(
                     f"{self.supabase_url}/rest/v1/patients",
                     headers={
@@ -174,18 +194,28 @@ class SupabaseUserService:
                         "Prefer": "resolution=merge-duplicates,return=representation",
                     },
                     params={"on_conflict": "user_id"},
-                    json={
-                        "user_id": created_user_id,
-                        "nutritionist_id": nutritionist_id,
-                        "birth_date": payload.birth_date.isoformat()
-                        if payload.birth_date
-                        else None,
-                        "gender": payload.gender,
-                        "objective": payload.objective,
-                        "notes": payload.notes,
-                        "is_active": True,
-                    },
+                    json=patient_payload,
                 )
+                if patient_response.status_code >= 400 and self._looks_like_missing_trial_columns(patient_response):
+                    patient_response = await client.post(
+                        f"{self.supabase_url}/rest/v1/patients",
+                        headers={
+                            **self.service_headers,
+                            "Prefer": "resolution=merge-duplicates,return=representation",
+                        },
+                        params={"on_conflict": "user_id"},
+                        json={
+                            key: value
+                            for key, value in patient_payload.items()
+                            if key
+                            not in {
+                                "access_status",
+                                "trial_days",
+                                "trial_started_at",
+                                "trial_ends_at",
+                            }
+                        },
+                    )
 
                 if patient_response.status_code >= 400:
                     await self._delete_auth_user(client, created_user_id)
@@ -212,7 +242,46 @@ class SupabaseUserService:
             "email": payload.email,
             "full_name": payload.full_name,
             "role": "patient",
+            "access_status": "TRIAL",
+            "trial_days": trial_days,
+            "trial_ends_at": trial_ends_at.isoformat(),
         }
+
+    async def _get_nutritionist_trial_days(
+        self,
+        client: httpx.AsyncClient,
+        nutritionist_id: str,
+    ) -> int:
+        response = await client.get(
+            f"{self.supabase_url}/rest/v1/nutritionists",
+            headers=self.service_headers,
+            params={
+                "id": f"eq.{nutritionist_id}",
+                "select": "default_patient_trial_days",
+                "limit": "1",
+            },
+        )
+        if response.status_code >= 400:
+            detail = self._extract_error(response).lower()
+            if "default_patient_trial_days" in detail or "column" in detail:
+                return 7
+            self._raise_supabase_error(response)
+
+        rows = response.json()
+        raw_days = rows[0].get("default_patient_trial_days") if rows else 7
+        return raw_days if raw_days in {7, 14, 30} else 7
+
+    def _looks_like_missing_trial_columns(self, response: httpx.Response) -> bool:
+        detail = self._extract_error(response).lower()
+        return any(
+            column in detail
+            for column in (
+                "access_status",
+                "trial_days",
+                "trial_started_at",
+                "trial_ends_at",
+            )
+        )
 
     async def _finalize_patient_import(
         self,

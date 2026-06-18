@@ -14,11 +14,14 @@ export type CreatePatientInput = {
 }
 
 export type CreatedPatient = {
+  access_status: 'TRIAL'
   profile_id: string
   patient_id: string
   email: string
   full_name: string
   role: 'patient'
+  trial_days: number
+  trial_ends_at: string
 }
 
 export type BioimpedanceImportResult = {

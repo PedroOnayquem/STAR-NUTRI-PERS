@@ -24,6 +24,10 @@ NUTRITIONIST_IMAGE_MIME_TYPES = {
     "image/webp": "webp",
 }
 _UNSET = object()
+TRIAL_ALLOWED_DAYS = {7, 14, 30}
+PATIENT_TRIAL_EXPIRED_MESSAGE = (
+    "Seu período gratuito expirou. Entre em contato com seu nutricionista para ativar o acesso."
+)
 
 
 class SupabaseWorkspaceService:
@@ -227,6 +231,7 @@ class SupabaseWorkspaceService:
                 "order": "created_at.desc",
             },
         )
+        patients = await self._refresh_patient_access_statuses(patients)
 
         return {
             "nutritionist": nutritionist,
@@ -242,6 +247,7 @@ class SupabaseWorkspaceService:
         clinic_name: str | None,
         phone: str | None,
         bio: str | None,
+        default_patient_trial_days: int | None,
         remove_image: bool,
         image: UploadFile | None,
     ) -> dict:
@@ -274,19 +280,41 @@ class SupabaseWorkspaceService:
             "phone": next_phone,
             "bio": next_bio,
         }
+        if default_patient_trial_days is not None:
+            if default_patient_trial_days not in TRIAL_ALLOWED_DAYS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A duração do Trial deve ser 7, 14 ou 30 dias.",
+                )
+            nutritionist_payload["default_patient_trial_days"] = default_patient_trial_days
         if image_path is not _UNSET:
             nutritionist_payload["avatar_path"] = image_path
             nutritionist_payload["logo_path"] = image_path
             nutritionist_payload["avatar_url"] = image_url
             nutritionist_payload["logo_url"] = image_url
 
-        updated_rows = await self._request(
-            "PATCH",
-            "/rest/v1/nutritionists",
-            params={"id": f"eq.{nutritionist['id']}"},
-            json=nutritionist_payload,
-            prefer="return=representation",
-        )
+        try:
+            updated_rows = await self._request(
+                "PATCH",
+                "/rest/v1/nutritionists",
+                params={"id": f"eq.{nutritionist['id']}"},
+                json=nutritionist_payload,
+                prefer="return=representation",
+            )
+        except HTTPException as exc:
+            if (
+                "default_patient_trial_days" not in nutritionist_payload
+                or "default_patient_trial_days" not in str(exc.detail)
+            ):
+                raise
+            nutritionist_payload.pop("default_patient_trial_days", None)
+            updated_rows = await self._request(
+                "PATCH",
+                "/rest/v1/nutritionists",
+                params={"id": f"eq.{nutritionist['id']}"},
+                json=nutritionist_payload,
+                prefer="return=representation",
+            )
         updated_nutritionist = updated_rows[0] if updated_rows else {
             **nutritionist,
             **nutritionist_payload,
@@ -447,19 +475,22 @@ class SupabaseWorkspaceService:
             "/rest/v1/patients",
             params={
                 "nutritionist_id": f"eq.{nutritionist['id']}",
-                "select": (
-                    "id,user_id,nutritionist_id,birth_date,gender,objective,notes,"
-                    "is_active,created_at,updated_at"
-                ),
+                "select": "*",
                 "order": "updated_at.desc.nullslast,created_at.desc",
             },
         )
+        raw_patients = await self._refresh_patient_access_statuses(raw_patients)
         patients = self._dedupe_patients(await self._attach_profiles(raw_patients))
         active_patients = [
-            patient for patient in patients if patient.get("is_active") is not False
+            patient
+            for patient in patients
+            if self._patient_has_premium_access(patient)
         ]
         active_patient_ids = [patient["id"] for patient in active_patients]
         active_patient_id_set = set(active_patient_ids)
+        trial_patients = [patient for patient in patients if patient.get("access_status") == "TRIAL"]
+        activated_patients = [patient for patient in patients if patient.get("access_status") == "ACTIVE"]
+        expired_patients = [patient for patient in patients if patient.get("access_status") == "EXPIRED"]
 
         now = datetime.now(UTC)
         today_date = self._dashboard_date(now)
@@ -564,6 +595,9 @@ class SupabaseWorkspaceService:
             "profile": profile,
             "stats": {
                 "active_patients": len(active_patients),
+                "trial_patients": len(trial_patients),
+                "activated_patients": len(activated_patients),
+                "expired_patients": len(expired_patients),
                 "appointments_today": len(appointments_today),
                 "active_diets": len(active_diets),
                 "important_alerts": len(alerts),
@@ -648,6 +682,7 @@ class SupabaseWorkspaceService:
 
         nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
         patient = await self._get_patient(patient_id)
+        patient = await self._refresh_patient_access_status(patient)
         if patient["nutritionist_id"] != nutritionist["id"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -690,6 +725,7 @@ class SupabaseWorkspaceService:
             )
 
         patient = await self.get_patient_by_user_id(profile["id"])
+        self._assert_patient_ai_access(patient)
         patient_profile = profile
         patient_id = patient["id"]
 
@@ -773,6 +809,7 @@ class SupabaseWorkspaceService:
         *,
         chat_scope: str | None = None,
     ) -> dict:
+        patient = await self._refresh_patient_access_status(patient)
         patient_id = patient["id"]
         (
             patient_profile,
@@ -885,11 +922,17 @@ class SupabaseWorkspaceService:
             patient_chats = await self.list_patient_chats_for_patient(patient_id)
 
         patient_payload = {**patient, "profile": patient_profile}
+        patient_access = self._patient_access_payload(patient)
+        if chat_scope == "patient" and not patient_access["has_premium_access"]:
+            diets = []
+            workouts = []
+
         if chat_scope == "patient":
             patient_payload["notes"] = None
 
         return {
             "patient": patient_payload,
+            "access": patient_access,
             "profile": patient_profile,
             "nutritionist": nutritionist,
             "main_metrics": main_metrics,
@@ -930,6 +973,16 @@ class SupabaseWorkspaceService:
             exclude_unset=True,
             exclude={"full_name", "phone"},
         )
+        if "access_status" in patient_payload:
+            access_status = patient_payload["access_status"]
+            if access_status not in {"TRIAL", "ACTIVE", "EXPIRED"}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Status do paciente inválido.",
+                )
+        if patient_payload.get("is_active") is False:
+            patient_payload["access_status"] = "EXPIRED"
+            patient_payload["expired_at"] = datetime.now(UTC).isoformat()
         if patient_payload:
             updated = await self._request(
                 "PATCH",
@@ -938,7 +991,7 @@ class SupabaseWorkspaceService:
                 json=patient_payload,
                 prefer="return=representation",
             )
-            patient = updated[0]
+            patient = await self._refresh_patient_access_status(updated[0])
 
         profile_payload = payload.model_dump(
             exclude_unset=True,
@@ -968,7 +1021,7 @@ class SupabaseWorkspaceService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Paciente fora do seu workspace.",
             )
-        return patient
+        return await self._refresh_patient_access_status(patient)
 
     async def search_patients_by_name_for_nutritionist(
         self,
@@ -986,10 +1039,7 @@ class SupabaseWorkspaceService:
             "/rest/v1/patients",
             params={
                 "nutritionist_id": f"eq.{nutritionist_id}",
-                "select": (
-                    "id,user_id,nutritionist_id,birth_date,gender,objective,notes,"
-                    "is_active,created_at,updated_at"
-                ),
+                "select": "*",
                 "order": "updated_at.desc.nullslast,created_at.desc",
                 "limit": "500",
             },
@@ -1361,9 +1411,57 @@ class SupabaseWorkspaceService:
         updated = await self.update_patient(
             token,
             patient_id,
-            UpdatePatientRequest(is_active=False),
+            UpdatePatientRequest(is_active=False, access_status="EXPIRED"),
         )
-        return {"id": updated["id"], "is_active": updated["is_active"]}
+        return {
+            "id": updated["id"],
+            "access_status": updated["access_status"],
+            "is_active": updated["is_active"],
+        }
+
+    async def activate_patient(
+        self,
+        token: str,
+        patient_id: str,
+        payload: Any | None = None,
+    ) -> dict:
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "nutritionist":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas nutricionistas podem ativar pacientes.",
+            )
+
+        nutritionist = await self.get_nutritionist_by_user_id(profile["id"])
+        patient = await self._get_patient(patient_id)
+        if patient["nutritionist_id"] != nutritionist["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Paciente fora do seu workspace.",
+            )
+
+        trial_days = getattr(payload, "trial_days", None) if payload else None
+        if trial_days is not None and trial_days not in TRIAL_ALLOWED_DAYS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A duração do Trial deve ser 7, 14 ou 30 dias.",
+            )
+
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/patients",
+            params={"id": f"eq.{patient_id}", "select": "*"},
+            json={
+                "access_status": "ACTIVE",
+                "activated_at": datetime.now(UTC).isoformat(),
+                "expired_at": None,
+                "is_active": True,
+            },
+            prefer="return=representation",
+        )
+        updated = await self._refresh_patient_access_status(rows[0])
+        profile_row = await self.get_profile(updated["user_id"])
+        return {**updated, "profile": profile_row}
 
     async def insert_ai_action_log(self, payload: dict) -> dict:
         rows = await self._request(
@@ -2018,6 +2116,7 @@ class SupabaseWorkspaceService:
                 detail="Apenas pacientes acessam chats pessoais.",
             )
         patient = await self.get_patient_by_user_id(profile["id"])
+        self._assert_patient_ai_access(patient)
         return profile, patient
 
     async def list_nutritionist_chats_for_patient(
@@ -2454,7 +2553,80 @@ class SupabaseWorkspaceService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Paciente nao encontrado.",
             )
-        return patient
+        return await self._refresh_patient_access_status(patient)
+
+    async def _refresh_patient_access_statuses(self, patients: list[dict]) -> list[dict]:
+        refreshed: list[dict] = []
+        for patient in patients:
+            refreshed.append(await self._refresh_patient_access_status(patient))
+        return refreshed
+
+    async def _refresh_patient_access_status(self, patient: dict) -> dict:
+        if not self._patient_trial_is_expired(patient):
+            return self._with_patient_access_metadata(patient)
+
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/patients",
+            params={"id": f"eq.{patient['id']}", "select": "*"},
+            json={
+                "access_status": "EXPIRED",
+                "expired_at": datetime.now(UTC).isoformat(),
+                "is_active": False,
+            },
+            prefer="return=representation",
+        )
+        updated = rows[0] if rows else {**patient, "access_status": "EXPIRED", "is_active": False}
+        return self._with_patient_access_metadata(updated)
+
+    def _patient_trial_is_expired(self, patient: dict) -> bool:
+        if patient.get("access_status") != "TRIAL":
+            return False
+        trial_ends_at = self._parse_datetime(patient.get("trial_ends_at"))
+        return bool(trial_ends_at and trial_ends_at <= datetime.now(UTC))
+
+    def _with_patient_access_metadata(self, patient: dict) -> dict:
+        access = self._patient_access_payload(patient)
+        return {
+            **patient,
+            "access_status": access["status"],
+            "trial_days_remaining": access["trial_days_remaining"],
+            "has_premium_access": access["has_premium_access"],
+            "trial_expired_message": access["expired_message"],
+        }
+
+    def _patient_access_payload(self, patient: dict) -> dict:
+        status_value = patient.get("access_status") or (
+            "ACTIVE" if patient.get("is_active") is not False else "EXPIRED"
+        )
+        trial_ends_at = self._parse_datetime(patient.get("trial_ends_at"))
+        if status_value == "TRIAL" and trial_ends_at and trial_ends_at <= datetime.now(UTC):
+            status_value = "EXPIRED"
+
+        days_remaining = 0
+        if status_value == "TRIAL" and trial_ends_at:
+            seconds_remaining = max(0.0, (trial_ends_at - datetime.now(UTC)).total_seconds())
+            days_remaining = max(1, int((seconds_remaining + 86399) // 86400))
+
+        has_access = status_value in {"TRIAL", "ACTIVE"}
+        return {
+            "status": status_value,
+            "trial_days_remaining": days_remaining,
+            "has_premium_access": has_access,
+            "can_use_ai_chat": has_access,
+            "expired_message": PATIENT_TRIAL_EXPIRED_MESSAGE if status_value == "EXPIRED" else None,
+        }
+
+    def _patient_has_premium_access(self, patient: dict) -> bool:
+        return self._patient_access_payload(patient)["has_premium_access"]
+
+    def _assert_patient_ai_access(self, patient: dict) -> None:
+        if self._patient_access_payload(patient)["can_use_ai_chat"]:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=PATIENT_TRIAL_EXPIRED_MESSAGE,
+        )
 
     async def _fetch_patient_rows(
         self,
@@ -2533,6 +2705,9 @@ class SupabaseWorkspaceService:
             "age": calculate_age(birth_date),
             "objective": patient.get("objective"),
             "is_active": patient.get("is_active"),
+            "access_status": patient.get("access_status"),
+            "trial_days_remaining": patient.get("trial_days_remaining"),
+            "has_premium_access": patient.get("has_premium_access"),
             "created_at": patient.get("created_at"),
             "updated_at": patient.get("updated_at"),
         }
@@ -2660,8 +2835,11 @@ class SupabaseWorkspaceService:
             "id": patient_id,
             "name": profile.get("full_name") or "Paciente",
             "objective": patient.get("objective"),
-            "status": "Ativo" if patient.get("is_active") is not False else "Inativo",
-            "is_active": patient.get("is_active") is not False,
+            "status": patient.get("access_status") or (
+                "ACTIVE" if patient.get("is_active") is not False else "EXPIRED"
+            ),
+            "is_active": self._patient_has_premium_access(patient),
+            "trial_days_remaining": patient.get("trial_days_remaining", 0),
             "last_update_at": latest_update_at,
             "next_appointment_at": (
                 next_appointment.get("scheduled_at") if next_appointment else None

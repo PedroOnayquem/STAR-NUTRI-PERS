@@ -114,7 +114,8 @@ class ChatContextService:
                     [
                         patient
                         for patient in workspace.get("patients", [])
-                        if patient.get("is_active") is not False
+                        if patient.get("has_premium_access") is not False
+                        and patient.get("access_status") != "EXPIRED"
                     ]
                 ),
                 "recent_patients": [

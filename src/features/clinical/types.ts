@@ -23,6 +23,7 @@ export type NutritionistRecord = {
   professional_name: string | null
   phone: string | null
   bio: string | null
+  default_patient_trial_days: number
   specialty: string | null
   created_at?: string | null
 }
@@ -31,11 +32,20 @@ export type PatientRecord = {
   id: string
   user_id: string
   nutritionist_id: string
+  access_status: 'TRIAL' | 'ACTIVE' | 'EXPIRED'
+  activated_at: string | null
   birth_date: string | null
+  expired_at: string | null
   gender: string | null
+  has_premium_access?: boolean
   objective: string | null
   notes: string | null
   is_active: boolean
+  trial_days: number | null
+  trial_days_remaining: number
+  trial_ends_at: string | null
+  trial_expired_message?: string | null
+  trial_started_at: string | null
   created_at?: string | null
   updated_at?: string | null
   profile?: ProfileSummary | null
@@ -270,6 +280,13 @@ export type PatientImportFileRecord = {
 }
 
 export type PatientContext = {
+  access?: {
+    can_use_ai_chat: boolean
+    expired_message: string | null
+    has_premium_access: boolean
+    status: 'TRIAL' | 'ACTIVE' | 'EXPIRED'
+    trial_days_remaining: number
+  }
   patient: PatientRecord
   profile: ProfileSummary | null
   nutritionist: NutritionistRecord | null
@@ -307,8 +324,9 @@ export type DashboardPatientSummary = {
   id: string
   name: string
   objective: string | null
-  status: 'Ativo' | 'Inativo'
+  status: 'TRIAL' | 'ACTIVE' | 'EXPIRED'
   is_active: boolean
+  trial_days_remaining: number
   last_update_at: string | null
   next_appointment_at: string | null
   alert: string | null
@@ -319,9 +337,12 @@ export type NutritionistDashboard = {
   profile: ProfileSummary
   stats: {
     active_patients: number
+    activated_patients: number
     appointments_today: number
     active_diets: number
+    expired_patients: number
     important_alerts: number
+    trial_patients: number
   }
   recent_patients: DashboardPatientSummary[]
   alerts: DashboardAlert[]

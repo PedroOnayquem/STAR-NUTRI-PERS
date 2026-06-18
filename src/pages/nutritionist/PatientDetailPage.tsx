@@ -17,6 +17,7 @@ import {
   Save,
   Search,
   Trash2,
+  UserCheck,
   Utensils,
   X,
 } from 'lucide-react'
@@ -71,6 +72,7 @@ import { createDietMealItem, searchTacoFoods } from '../../features/taco/service
 import type { TacoFoodRecord } from '../../features/taco/types'
 import {
   getPatientImportFileSignedUrls,
+  activateNutritionistPatient,
   getNutritionistPatientContext,
   updateNutritionistPatient,
 } from '../../features/clinical/services/workspaceService'
@@ -115,6 +117,7 @@ const healthConditionOptions: Array<{
 export function PatientDetailPage() {
   const { patientId } = useParams()
   const { session } = useAuth()
+  const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
 
   const queryKey = ['nutritionist-patient-context', patientId]
@@ -122,6 +125,14 @@ export function PatientDetailPage() {
     queryKey,
     queryFn: () => getNutritionistPatientContext(patientId!, session),
     enabled: Boolean(patientId && session),
+  })
+  const activateMutation = useMutation({
+    mutationFn: () => activateNutritionistPatient(patientId!, session),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey })
+      queryClient.invalidateQueries({ queryKey: ['nutritionist-workspace'] })
+      queryClient.invalidateQueries({ queryKey: ['nutritionist-dashboard'] })
+    },
   })
 
   if (query.isLoading) return <PageSkeleton />
@@ -136,8 +147,20 @@ export function PatientDetailPage() {
   return (
     <div className="space-y-6">
       <SectionHeader
+        actions={
+          context.patient.access_status === 'EXPIRED' ? (
+            <Button
+              disabled={activateMutation.isPending}
+              onClick={() => activateMutation.mutate()}
+              variant="premium"
+            >
+              <UserCheck size={18} />
+              {activateMutation.isPending ? 'Ativando...' : 'Ativar paciente'}
+            </Button>
+          ) : undefined
+        }
         description={context.patient.objective || 'Paciente sem objetivo definido.'}
-        eyebrow={<Badge tone={context.patient.is_active ? 'green' : 'amber'}>{context.patient.is_active ? 'Ativo' : 'Inativo'}</Badge>}
+        eyebrow={<Badge tone={patientStatusTone(context.patient.access_status)}>{patientStatusLabel(context.patient)}</Badge>}
         title={patientName}
       />
 
@@ -1348,6 +1371,20 @@ function conditionTypeLabel(type: HealthConditionRecord['condition_type']) {
     observation: 'Observação',
   }
   return labels[type]
+}
+
+function patientStatusLabel(patient: { access_status: 'TRIAL' | 'ACTIVE' | 'EXPIRED'; trial_days_remaining?: number }) {
+  if (patient.access_status === 'TRIAL') {
+    return `Trial: ${patient.trial_days_remaining ?? 0} dias`
+  }
+  if (patient.access_status === 'ACTIVE') return 'Ativo'
+  return 'Expirado'
+}
+
+function patientStatusTone(status: 'TRIAL' | 'ACTIVE' | 'EXPIRED') {
+  if (status === 'TRIAL') return 'blue'
+  if (status === 'ACTIVE') return 'green'
+  return 'red'
 }
 
 function conditionDisplayTitle(condition: HealthConditionRecord) {

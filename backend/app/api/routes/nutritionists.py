@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from ...schemas.patients import CreatePatientRequest, CreatePatientResponse
-from ...schemas.workspace import UpdatePatientRequest
+from ...schemas.workspace import ActivatePatientRequest, UpdatePatientRequest
 from ...services.bioimpedance_import_service import BioimpedanceImportService
 from ...services.supabase_user_service import SupabaseUserService
 from ...services.supabase_workspace_service import SupabaseWorkspaceService
@@ -16,6 +16,7 @@ async def update_profile(
     clinic_name: str | None = Form(None),
     phone: str | None = Form(None),
     bio: str | None = Form(None),
+    default_patient_trial_days: int | None = Form(None),
     remove_image: bool = Form(False),
     image: UploadFile | None = File(None),
     token: str = Depends(get_bearer_token),
@@ -27,6 +28,7 @@ async def update_profile(
         clinic_name=clinic_name,
         phone=phone,
         bio=bio,
+        default_patient_trial_days=default_patient_trial_days,
         remove_image=remove_image,
         image=image,
     )
@@ -109,6 +111,16 @@ async def update_patient(
 ) -> dict:
     service = SupabaseWorkspaceService()
     return await service.update_patient(token, patient_id, payload)
+
+
+@router.post("/patients/{patient_id}/activate")
+async def activate_patient(
+    patient_id: str,
+    payload: ActivatePatientRequest | None = None,
+    token: str = Depends(get_bearer_token),
+) -> dict:
+    service = SupabaseWorkspaceService()
+    return await service.activate_patient(token, patient_id, payload)
 
 
 @router.delete("/patients/{patient_id}")

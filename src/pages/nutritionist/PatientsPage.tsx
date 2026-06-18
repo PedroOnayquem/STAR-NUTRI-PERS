@@ -3,7 +3,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { Link, useNavigate } from 'react-router-dom'
-import { AlertTriangle, CheckCircle2, FileText, Mail, Plus, Search, Upload, UserPlus, Users, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileText, Mail, Plus, Search, Upload, UserCheck, UserPlus, Users, X } from 'lucide-react'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -13,7 +13,10 @@ import { Input, Textarea } from '../../components/ui/Input'
 import { SectionHeader } from '../../components/ui/SectionHeader'
 import { PageSkeleton } from '../../components/ui/Skeleton'
 import { useAuth } from '../../features/auth/useAuth'
-import { getNutritionistWorkspace } from '../../features/clinical/services/workspaceService'
+import {
+  activateNutritionistPatient,
+  getNutritionistWorkspace,
+} from '../../features/clinical/services/workspaceService'
 import {
   createPatient,
   importBioimpedanceReport,
@@ -34,6 +37,7 @@ type SelectedImportFile = {
   file: File
   error: string | null
 }
+type PatientStatusFilter = 'ALL' | 'TRIAL' | 'ACTIVE' | 'EXPIRED'
 
 const patientSchema = z.object({
   fullName: z.string().min(3, 'Informe o nome completo.'),
@@ -91,6 +95,7 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<PatientStatusFilter>('ALL')
   const deferredSearch = useDeferredValue(search)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [reportImport, setReportImport] = useState<BioimpedanceImportResult | null>(null)
@@ -122,6 +127,13 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['nutritionist-workspace'] })
       navigate(`/nutritionist/patients/${created.patient_id}`)
+    },
+  })
+  const activateMutation = useMutation({
+    mutationFn: (patientId: string) => activateNutritionistPatient(patientId, session),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nutritionist-workspace'] })
+      queryClient.invalidateQueries({ queryKey: ['nutritionist-dashboard'] })
     },
   })
 
@@ -197,18 +209,31 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
     importMutation.mutate(validImportFiles.map((item) => item.file))
   }
 
+  const patientStatusCounts = useMemo(() => {
+    const all = workspaceQuery.data?.patients ?? []
+    return {
+      ACTIVE: all.filter((patient) => patient.access_status === 'ACTIVE').length,
+      ALL: all.length,
+      EXPIRED: all.filter((patient) => patient.access_status === 'EXPIRED').length,
+      TRIAL: all.filter((patient) => patient.access_status === 'TRIAL').length,
+    }
+  }, [workspaceQuery.data?.patients])
+
   const patients = useMemo(() => {
     const all = workspaceQuery.data?.patients ?? []
     const term = deferredSearch.trim().toLowerCase()
-    if (!term) return all
+    const filteredByStatus = statusFilter === 'ALL'
+      ? all
+      : all.filter((patient) => patient.access_status === statusFilter)
+    if (!term) return filteredByStatus
 
-    return all.filter((patient) => {
+    return filteredByStatus.filter((patient) => {
       const name = patient.profile?.full_name?.toLowerCase() ?? ''
       const email = patient.profile?.email?.toLowerCase() ?? ''
       const objective = patient.objective?.toLowerCase() ?? ''
       return name.includes(term) || email.includes(term) || objective.includes(term)
     })
-  }, [deferredSearch, workspaceQuery.data?.patients])
+  }, [deferredSearch, statusFilter, workspaceQuery.data?.patients])
 
   if (workspaceQuery.isLoading) return <PageSkeleton />
   if (workspaceQuery.error) throw workspaceQuery.error
@@ -423,6 +448,25 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
             value={search}
           />
         </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(['ALL', 'TRIAL', 'ACTIVE', 'EXPIRED'] as const).map((status) => (
+            <button
+              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-bold transition ${
+                statusFilter === status
+                  ? 'border-cyan-300/40 bg-cyan-300/10 text-cyan-700 dark:text-cyan-200'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5'
+              }`}
+              key={status}
+              onClick={() => setStatusFilter(status)}
+              type="button"
+            >
+              {patientStatusFilterLabel(status)}
+              <span className="rounded-full bg-slate-950 px-2 py-0.5 text-xs text-white dark:bg-white dark:text-slate-950">
+                {patientStatusCounts[status]}
+              </span>
+            </button>
+          ))}
+        </div>
       </Card>
 
       {patients.length === 0 ? (
@@ -449,13 +493,29 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
                       {patient.profile?.email}
                     </p>
                   </div>
-                  <Badge tone={patient.is_active ? 'green' : 'amber'}>
-                    {patient.is_active ? 'Ativo' : 'Inativo'}
+                  <Badge tone={patientStatusTone(patient.access_status)}>
+                    {patientStatusLabel(patient)}
                   </Badge>
                 </div>
                 <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
                   {patient.objective || 'Objetivo ainda não informado.'}
                 </p>
+                {patient.access_status === 'EXPIRED' && (
+                  <Button
+                    className="mt-4"
+                    disabled={activateMutation.isPending}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      activateMutation.mutate(patient.id)
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="premium"
+                  >
+                    <UserCheck size={16} />
+                    Ativar paciente
+                  </Button>
+                )}
               </Card>
             </Link>
           ))}
@@ -463,6 +523,30 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
       )}
     </div>
   )
+}
+
+function patientStatusFilterLabel(status: PatientStatusFilter) {
+  const labels: Record<PatientStatusFilter, string> = {
+    ACTIVE: 'Ativos',
+    ALL: 'Todos',
+    EXPIRED: 'Expirados',
+    TRIAL: 'Em Trial',
+  }
+  return labels[status]
+}
+
+function patientStatusLabel(patient: { access_status: 'TRIAL' | 'ACTIVE' | 'EXPIRED'; trial_days_remaining?: number }) {
+  if (patient.access_status === 'TRIAL') {
+    return `Trial: ${patient.trial_days_remaining ?? 0} dias`
+  }
+  if (patient.access_status === 'ACTIVE') return 'Ativo'
+  return 'Expirado'
+}
+
+function patientStatusTone(status: 'TRIAL' | 'ACTIVE' | 'EXPIRED') {
+  if (status === 'TRIAL') return 'blue'
+  if (status === 'ACTIVE') return 'green'
+  return 'red'
 }
 
 function Field({

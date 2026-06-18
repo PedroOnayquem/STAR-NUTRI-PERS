@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
+  AlertTriangle,
   CalendarDays,
   Dumbbell,
   Droplets,
   ExternalLink,
   HeartPulse,
   LineChart as LineChartIcon,
+  LockKeyhole,
   MapPin,
   Save,
   Utensils,
@@ -58,6 +60,13 @@ export function PatientWorkspacePage({
   if (!query.data) return null
 
   const context = query.data
+  const access = context.access ?? {
+    can_use_ai_chat: context.patient.access_status !== 'EXPIRED',
+    expired_message: context.patient.trial_expired_message ?? null,
+    has_premium_access: context.patient.access_status !== 'EXPIRED',
+    status: context.patient.access_status,
+    trial_days_remaining: context.patient.trial_days_remaining ?? 0,
+  }
   const title = context.profile?.full_name
     ? `Olá, ${context.profile.full_name.split(' ')[0]}`
     : 'Área do paciente'
@@ -66,25 +75,68 @@ export function PatientWorkspacePage({
     <div className="space-y-6">
       <SectionHeader
         description="Acompanhe seu plano, atualize métricas e converse com a IA dentro das orientações do nutricionista."
-        eyebrow={<Badge tone="green">Área do paciente</Badge>}
+        eyebrow={<Badge tone={access.status === 'EXPIRED' ? 'red' : access.status === 'TRIAL' ? 'blue' : 'green'}>{patientAccessLabel(access)}</Badge>}
         title={title}
       />
 
+      {access.status === 'EXPIRED' ? (
+        <AccessExpiredNotice message={access.expired_message} />
+      ) : access.status === 'TRIAL' ? (
+        <Card className="border-cyan-200 bg-cyan-50/80 p-4 text-sm font-semibold text-cyan-800 dark:border-cyan-400/20 dark:bg-cyan-400/10 dark:text-cyan-100">
+          Você está no período gratuito. Restam {access.trial_days_remaining} {access.trial_days_remaining === 1 ? 'dia' : 'dias'} de acesso.
+        </Card>
+      ) : null}
+
       {view === 'dashboard' && <PatientDashboard context={context} />}
-      {view === 'diet' && <PatientDiet context={context} />}
-      {view === 'workout' && <PatientWorkout context={context} />}
+      {view === 'diet' && (access.has_premium_access ? <PatientDiet context={context} /> : <PremiumBlocked />)}
+      {view === 'workout' && (access.has_premium_access ? <PatientWorkout context={context} /> : <PremiumBlocked />)}
       {view === 'agenda' && <PatientAgenda context={context} />}
-      {view === 'metrics' && <PatientMetrics context={context} queryKey={queryKey} />}
-      {view === 'chat' && (
+      {view === 'metrics' && (access.has_premium_access ? <PatientMetrics context={context} queryKey={queryKey} /> : <PremiumBlocked />)}
+      {view === 'chat' && access.can_use_ai_chat && (
         <ChatExperience
           externalQueryKey={queryKey}
           patientName={context.profile?.full_name ?? undefined}
           scope="patient"
         />
       )}
+      {view === 'chat' && !access.can_use_ai_chat && <PremiumBlocked />}
       {view === 'profile' && <Profile context={context} queryKey={queryKey} />}
     </div>
   )
+}
+
+function AccessExpiredNotice({ message }: { message: string | null }) {
+  return (
+    <Card className="border-rose-200 bg-rose-50 p-5 dark:border-rose-400/20 dark:bg-rose-400/10">
+      <div className="flex gap-3">
+        <div className="rounded-xl bg-rose-100 p-2.5 text-rose-700 dark:bg-rose-400/10 dark:text-rose-200">
+          <AlertTriangle size={20} />
+        </div>
+        <div>
+          <h2 className="font-black text-rose-800 dark:text-rose-100">Período gratuito expirado</h2>
+          <p className="mt-1 text-sm leading-6 text-rose-700 dark:text-rose-200">
+            {message || 'Entre em contato com seu nutricionista para ativar seu acesso.'}
+          </p>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function PremiumBlocked() {
+  return (
+    <EmptyState
+      description="Entre em contato com seu nutricionista para ativar seu acesso completo."
+      icon={<LockKeyhole size={22} />}
+      title="Acesso bloqueado"
+    />
+  )
+}
+
+function patientAccessLabel(access: { status: 'TRIAL' | 'ACTIVE' | 'EXPIRED'; trial_days_remaining: number }) {
+  if (access.status === 'TRIAL') return `Trial: ${access.trial_days_remaining} dias`
+  if (access.status === 'ACTIVE') return 'Acesso ativo'
+  return 'Trial expirado'
 }
 
 function PatientDashboard({ context }: { context: PatientContext }) {

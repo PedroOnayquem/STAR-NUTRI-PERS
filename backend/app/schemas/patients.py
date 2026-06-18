@@ -20,3 +20,6 @@ class CreatePatientResponse(BaseModel):
     email: EmailStr
     full_name: str
     role: str = "patient"
+    access_status: str = "TRIAL"
+    trial_days: int
+    trial_ends_at: str

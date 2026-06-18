@@ -4,6 +4,7 @@ import { Camera, Save, Trash2, Upload } from 'lucide-react'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { AppSelect } from '../../components/ui/FormControls'
 import { Input, Textarea } from '../../components/ui/Input'
 import { PageSkeleton } from '../../components/ui/Skeleton'
 import { SectionHeader } from '../../components/ui/SectionHeader'
@@ -25,6 +26,7 @@ export function NutritionistProfilePage() {
   const [form, setForm] = useState({
     bio: '',
     clinic_name: '',
+    default_patient_trial_days: 7,
     phone: '',
     professional_name: '',
   })
@@ -49,6 +51,7 @@ export function NutritionistProfilePage() {
     setForm({
       bio: nutritionist?.bio ?? '',
       clinic_name: nutritionist?.clinic_name ?? '',
+      default_patient_trial_days: nutritionist?.default_patient_trial_days ?? 7,
       phone: nutritionist?.phone ?? profile?.phone ?? '',
       professional_name: nutritionist?.professional_name ?? profile?.full_name ?? '',
     })
@@ -229,6 +232,17 @@ export function NutritionistProfilePage() {
             </Field>
             <Field label="Especialidade">
               <Input disabled value={nutritionist?.specialty ?? 'Não informada'} />
+            </Field>
+            <Field label="Trial gratuito para novos pacientes">
+              <AppSelect
+                onChange={(value) => setForm({ ...form, default_patient_trial_days: Number(value) })}
+                options={[
+                  { label: '7 dias', value: '7' },
+                  { label: '14 dias', value: '14' },
+                  { label: '30 dias', value: '30' },
+                ]}
+                value={String(form.default_patient_trial_days)}
+              />
             </Field>
             <div className="md:col-span-2">
               <Field label="Bio ou descrição profissional">

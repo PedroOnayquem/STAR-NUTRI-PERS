@@ -24,9 +24,21 @@ import type {
 const statCards = [
   {
     key: 'active_patients',
-    label: 'Pacientes ativos',
-    caption: 'em acompanhamento',
+    label: 'Com acesso',
+    caption: 'Trial ou ativo',
     icon: <Users size={20} />,
+  },
+  {
+    key: 'trial_patients',
+    label: 'Em Trial',
+    caption: 'período gratuito',
+    icon: <Clock3 size={20} />,
+  },
+  {
+    key: 'expired_patients',
+    label: 'Expirados',
+    caption: 'aguardando ativação',
+    icon: <AlertTriangle size={20} />,
   },
   {
     key: 'appointments_today',
@@ -74,7 +86,7 @@ export function NutritionistDashboardPage() {
         title="Dashboard do Nutricionista"
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {statCards.map((card) => (
           <SummaryCard
             caption={card.caption}
@@ -196,7 +208,7 @@ function RecentPatientRow({ patient }: { patient: DashboardPatientSummary }) {
           <p className="truncate font-bold text-slate-950 dark:text-white">
             {patient.name}
           </p>
-          <Badge tone={patient.is_active ? 'green' : 'slate'}>{patient.status}</Badge>
+          <Badge tone={patientStatusTone(patient.status)}>{patientStatusLabel(patient)}</Badge>
         </div>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Objetivo: {patient.objective || 'Não informado'}
@@ -272,6 +284,18 @@ function MiniInfo({
       </p>
     </div>
   )
+}
+
+function patientStatusLabel(patient: DashboardPatientSummary) {
+  if (patient.status === 'TRIAL') return `Trial: ${patient.trial_days_remaining} dias`
+  if (patient.status === 'ACTIVE') return 'Ativo'
+  return 'Expirado'
+}
+
+function patientStatusTone(status: DashboardPatientSummary['status']) {
+  if (status === 'TRIAL') return 'blue'
+  if (status === 'ACTIVE') return 'green'
+  return 'red'
 }
 
 function DashboardSkeleton() {
