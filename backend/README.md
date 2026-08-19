@@ -4,7 +4,14 @@ Backend em Python com FastAPI.
 
 ## Como rodar
 
-Crie e ative um ambiente virtual:
+Pela raiz do projeto, a opcao recomendada sobe a API em Docker e nao exige
+Python ou ambiente virtual instalados localmente:
+
+```bash
+npm run dev:api
+```
+
+Para desenvolvimento local sem Docker, crie e ative um ambiente virtual:
 
 ```bash
 python -m venv .venv
@@ -33,16 +40,16 @@ Essa chave fica somente no backend. Sem ela, o cadastro de nutricionistas e
 pacientes retorna erro de configuracao, porque ambos criam usuarios no Supabase
 Auth pelo servidor.
 
-Inicie a API:
+Inicie a API local:
+
+```bash
+npm run dev:api:local
+```
+
+O script local executa o comando equivalente:
 
 ```bash
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Ou, pela raiz do projeto:
-
-```bash
-npm run dev:api
 ```
 
 Deixe esse terminal aberto enquanto usa o frontend. Se a API nao estiver
