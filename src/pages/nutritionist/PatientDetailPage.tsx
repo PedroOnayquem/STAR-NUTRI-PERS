@@ -728,11 +728,17 @@ function MetricsTab({
   })
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
-      <Card className="p-5">
+    <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <Card className="min-w-0 p-5">
         <h2 className="font-black">Evolução de peso</h2>
-        <div className="mt-4 h-80">
-          <ResponsiveContainer height="100%" width="100%">
+        <div className="mt-4 h-80 min-w-0">
+          <ResponsiveContainer
+            height="100%"
+            initialDimension={{ width: 640, height: 320 }}
+            minHeight={0}
+            minWidth={0}
+            width="100%"
+          >
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="date" />

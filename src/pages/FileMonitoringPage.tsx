@@ -49,12 +49,18 @@ export function FileMonitoringPage() {
         <StatCard icon={<Bot size={20} />} label="Uso pela IA" value={data.summary.ai_usage_count} caption={`${data.summary.file_access_count} acessos aos arquivos`} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
-        <Card className="p-5">
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <Card className="min-w-0 p-5">
           <h2 className="font-black">Evolução no período</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Uploads, falhas e consultas pela IA por dia.</p>
-          <div className="mt-5 h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="mt-5 h-72 min-w-0">
+            <ResponsiveContainer
+              height="100%"
+              initialDimension={{ width: 640, height: 288 }}
+              minHeight={0}
+              minWidth={0}
+              width="100%"
+            >
               <LineChart data={data.daily}>
                 <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                 <XAxis dataKey="date" tickFormatter={(value) => value.slice(5)} fontSize={12} />

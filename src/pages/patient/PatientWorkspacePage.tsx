@@ -438,13 +438,19 @@ function Evolution({ context, compact = false }: { context: PatientContext; comp
     })), [context.variable_metrics])
 
   return (
-    <Card className="p-5">
+    <Card className="min-w-0 p-5">
       <div className="flex items-center gap-2">
         <LineChartIcon size={20} />
         <h2 className="font-black">Evolução</h2>
       </div>
-      <div className={compact ? 'mt-4 h-72' : 'mt-4 h-96'}>
-        <ResponsiveContainer height="100%" width="100%">
+      <div className={compact ? 'mt-4 h-72 min-w-0' : 'mt-4 h-96 min-w-0'}>
+        <ResponsiveContainer
+          height="100%"
+          initialDimension={{ width: 640, height: compact ? 288 : 384 }}
+          minHeight={0}
+          minWidth={0}
+          width="100%"
+        >
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" />
