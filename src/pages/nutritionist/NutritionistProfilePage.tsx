@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { Session } from '@supabase/supabase-js'
 import { Camera, Save, Trash2, Upload } from 'lucide-react'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
@@ -15,27 +16,13 @@ import {
   updateNutritionistProfile,
 } from '../../features/clinical/services/workspaceService'
 import { nutritionistAvatarUrl } from '../../lib/storageImages'
+import type { NutritionistRecord, ProfileSummary } from '../../features/clinical/types'
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 export function NutritionistProfilePage() {
-  const { refreshProfile, session } = useAuth()
-  const queryClient = useQueryClient()
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [form, setForm] = useState({
-    bio: '',
-    clinic_name: '',
-    default_patient_trial_days: 7,
-    phone: '',
-    professional_name: '',
-  })
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [removeImage, setRemoveImage] = useState(false)
-  const [imageFailed, setImageFailed] = useState(false)
-  const [feedback, setFeedback] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { session } = useAuth()
 
   const workspaceQuery = useQuery({
     queryKey: ['nutritionist-workspace'],
@@ -46,32 +33,58 @@ export function NutritionistProfilePage() {
   const nutritionist = workspaceQuery.data?.nutritionist
   const profile = workspaceQuery.data?.profile
 
-  useEffect(() => {
-    if (!nutritionist && !profile) return
-    setForm({
-      bio: nutritionist?.bio ?? '',
-      clinic_name: nutritionist?.clinic_name ?? '',
-      default_patient_trial_days: nutritionist?.default_patient_trial_days ?? 7,
-      phone: nutritionist?.phone ?? profile?.phone ?? '',
-      professional_name: nutritionist?.professional_name ?? profile?.full_name ?? '',
-    })
-  }, [nutritionist, profile])
+  if (workspaceQuery.isLoading) return <PageSkeleton />
+  if (workspaceQuery.error) throw workspaceQuery.error
+  if (!nutritionist || !profile) return null
+
+  return (
+    <NutritionistProfileEditor
+      key={nutritionistProfileKey(nutritionist, profile)}
+      nutritionist={nutritionist}
+      profile={profile}
+      session={session}
+    />
+  )
+}
+
+function NutritionistProfileEditor({
+  nutritionist,
+  profile,
+  session,
+}: {
+  nutritionist: NutritionistRecord
+  profile: ProfileSummary
+  session: Session | null
+}) {
+  const { refreshProfile } = useAuth()
+  const queryClient = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const previewUrlRef = useRef<string | null>(null)
+  const [form, setForm] = useState(() => ({
+    bio: nutritionist.bio ?? '',
+    clinic_name: nutritionist.clinic_name ?? '',
+    default_patient_trial_days: nutritionist.default_patient_trial_days ?? 7,
+    phone: nutritionist.phone ?? profile.phone ?? '',
+    professional_name: nutritionist.professional_name ?? profile.full_name ?? '',
+  }))
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [removeImage, setRemoveImage] = useState(false)
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!imageFile) return
-    const objectUrl = URL.createObjectURL(imageFile)
-    setPreviewUrl(objectUrl)
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [imageFile])
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
+    }
+  }, [])
 
   const currentImageUrl = useMemo(() => {
     if (removeImage) return null
     return previewUrl || nutritionistAvatarUrl(nutritionist, profile)
   }, [nutritionist, previewUrl, profile, removeImage])
-
-  useEffect(() => {
-    setImageFailed(false)
-  }, [currentImageUrl])
+  const imageFailed = currentImageUrl === failedImageUrl
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -84,7 +97,7 @@ export function NutritionistProfilePage() {
       setFeedback('Perfil do nutricionista atualizado com sucesso.')
       setError(null)
       setImageFile(null)
-      setPreviewUrl(null)
+      clearPreviewUrl()
       setRemoveImage(false)
       queryClient.invalidateQueries({ queryKey: ['nutritionist-workspace'] })
       queryClient.invalidateQueries({ queryKey: ['nutritionist-dashboard'] })
@@ -96,9 +109,6 @@ export function NutritionistProfilePage() {
       setError(caught instanceof Error ? caught.message : 'Não foi possível salvar o perfil.')
     },
   })
-
-  if (workspaceQuery.isLoading) return <PageSkeleton />
-  if (workspaceQuery.error) throw workspaceQuery.error
 
   function handleFileChange(file: File | null) {
     setFeedback(null)
@@ -112,19 +122,31 @@ export function NutritionistProfilePage() {
       setError('A imagem deve ter no máximo 5 MB.')
       return
     }
+    clearPreviewUrl()
+    const objectUrl = URL.createObjectURL(file)
+    previewUrlRef.current = objectUrl
+    setPreviewUrl(objectUrl)
     setImageFile(file)
     setRemoveImage(false)
   }
 
   function handleRemoveImage() {
     setImageFile(null)
-    setPreviewUrl(null)
+    clearPreviewUrl()
     setRemoveImage(true)
     setFeedback(null)
     setError(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
+  }
+
+  function clearPreviewUrl() {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPreviewUrl(null)
   }
 
   return (
@@ -144,7 +166,7 @@ export function NutritionistProfilePage() {
                   <img
                     alt="Prévia da imagem profissional"
                     className="h-full w-full object-cover"
-                    onError={() => setImageFailed(true)}
+                    onError={() => setFailedImageUrl(currentImageUrl)}
                     src={currentImageUrl}
                   />
                 </div>
@@ -282,6 +304,27 @@ export function NutritionistProfilePage() {
       </div>
     </div>
   )
+}
+
+function nutritionistProfileKey(
+  nutritionist: NutritionistRecord,
+  profile: ProfileSummary,
+) {
+  return JSON.stringify([
+    nutritionist.id,
+    nutritionist.bio,
+    nutritionist.clinic_name,
+    nutritionist.default_patient_trial_days,
+    nutritionist.phone,
+    nutritionist.professional_name,
+    nutritionist.avatar_path,
+    nutritionist.avatar_url,
+    nutritionist.logo_path,
+    nutritionist.logo_url,
+    profile.full_name,
+    profile.phone,
+    profile.avatar_url,
+  ])
 }
 
 function Field({ children, label }: { children: ReactNode; label: string }) {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { NutritionistRecord, ProfileSummary } from '../../features/clinical/types'
 import { nutritionistAvatarUrl } from '../../lib/storageImages'
 import { cn } from '../../lib/utils'
@@ -15,16 +15,13 @@ export function NutritionistAvatar({
   profile,
 }: NutritionistAvatarProps) {
   const imageUrl = nutritionistAvatarUrl(nutritionist, profile)
-  const [imageFailed, setImageFailed] = useState(false)
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null)
+  const imageFailed = imageUrl === failedImageUrl
   const name =
     nutritionist?.professional_name ||
     profile?.full_name ||
     nutritionist?.clinic_name ||
     'Nutricionista'
-
-  useEffect(() => {
-    setImageFailed(false)
-  }, [imageUrl])
 
   return (
     <div
@@ -37,7 +34,7 @@ export function NutritionistAvatar({
         <img
           alt={name}
           className="h-full w-full object-cover"
-          onError={() => setImageFailed(true)}
+          onError={() => setFailedImageUrl(imageUrl)}
           src={imageUrl}
         />
       ) : (

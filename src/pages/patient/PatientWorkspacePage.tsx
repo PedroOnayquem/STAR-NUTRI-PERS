@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -100,7 +100,13 @@ export function PatientWorkspacePage({
         />
       )}
       {view === 'chat' && !access.can_use_ai_chat && <PremiumBlocked />}
-      {view === 'profile' && <Profile context={context} queryKey={queryKey} />}
+      {view === 'profile' && (
+        <Profile
+          context={context}
+          key={patientProfileKey(context)}
+          queryKey={queryKey}
+        />
+      )}
     </div>
   )
 }
@@ -464,16 +470,6 @@ function Profile({ context, queryKey }: { context: PatientContext; queryKey: unk
     phone: context.profile?.phone ?? '',
   }))
 
-  useEffect(() => {
-    setForm({
-      birth_date: context.patient.birth_date ?? '',
-      full_name: context.profile?.full_name ?? '',
-      gender: context.patient.gender ?? '',
-      objective: context.patient.objective ?? '',
-      phone: context.profile?.phone ?? '',
-    })
-  }, [context.patient, context.profile])
-
   const mutation = useMutation({
     mutationFn: () =>
       updateMyPatientProfile(session, {
@@ -588,6 +584,17 @@ function Field({
 function nullable(value: string) {
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+function patientProfileKey(context: PatientContext) {
+  return JSON.stringify([
+    context.patient.id,
+    context.patient.birth_date,
+    context.patient.gender,
+    context.patient.objective,
+    context.profile?.full_name,
+    context.profile?.phone,
+  ])
 }
 
 function formatDate(value: string) {

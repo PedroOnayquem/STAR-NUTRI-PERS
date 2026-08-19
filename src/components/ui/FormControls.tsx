@@ -8,6 +8,7 @@ import {
   Search,
 } from 'lucide-react'
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -186,19 +187,17 @@ export function AppDatePicker({
     const base = selectedDate ?? new Date()
     return new Date(base.getFullYear(), base.getMonth(), 1)
   })
+  const handleOpenChange = useCallback((nextOpen: boolean) => {
+    if (nextOpen) {
+      const base = value ? parseLocalDate(value) : new Date()
+      setCalendarView('days')
+      setVisibleMonth(new Date(base.getFullYear(), base.getMonth(), 1))
+    }
+    setOpen(nextOpen)
+  }, [value])
 
   useFloatingPosition(open, triggerRef, setPosition)
-  useDismiss(open, setOpen, triggerRef, popoverRef)
-
-  useEffect(() => {
-    if (!open) setCalendarView('days')
-  }, [open])
-
-  useEffect(() => {
-    if (selectedDate) {
-      setVisibleMonth(new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1))
-    }
-  }, [value])
+  useDismiss(open, handleOpenChange, triggerRef, popoverRef)
 
   const days = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth])
   const yearOptions = useMemo(() => {
@@ -220,8 +219,8 @@ export function AppDatePicker({
         className={triggerClassName({ disabled, error })}
         disabled={disabled}
         data-picker="date"
-        onClick={() => setOpen((current) => !current)}
-        onKeyDown={(event) => handleTriggerKey(event, setOpen)}
+        onClick={() => handleOpenChange(!open)}
+        onKeyDown={(event) => handleTriggerKey(event, handleOpenChange)}
         ref={triggerRef}
         type="button"
       >
@@ -350,7 +349,7 @@ export function AppDatePicker({
                         key={day.toISOString()}
                         onClick={() => {
                           onChange(toDateValue(day))
-                          setOpen(false)
+                          handleOpenChange(false)
                         }}
                         type="button"
                       >
@@ -434,7 +433,7 @@ export function AppDatePicker({
                   onChange(toDateValue(today))
                   setVisibleMonth(new Date(today.getFullYear(), today.getMonth(), 1))
                   setCalendarView('days')
-                  setOpen(false)
+                  handleOpenChange(false)
                 }}
                 type="button"
               >

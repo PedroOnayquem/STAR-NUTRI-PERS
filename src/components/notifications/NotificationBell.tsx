@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, Clock3 } from 'lucide-react'
 import { Button } from '../ui/Button'
@@ -28,10 +28,7 @@ export function NotificationBell() {
     enabled: profile?.role === 'patient',
   })
   const notifications = query.data ?? []
-  const unreadCount = useMemo(
-    () => notifications.filter((notification) => !notification.read).length,
-    [notifications],
-  )
+  const unreadCount = query.data?.filter((notification) => !notification.read).length ?? 0
 
   const markReadMutation = useMutation({
     mutationFn: markNotificationRead,

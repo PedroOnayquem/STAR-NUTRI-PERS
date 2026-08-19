@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 import { Link, useNavigate } from 'react-router-dom'
 import { AlertTriangle, CheckCircle2, FileText, Mail, Plus, Search, Upload, UserCheck, UserPlus, Users, X } from 'lucide-react'
@@ -121,6 +121,7 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
       notes: '',
     },
   })
+  const birthDate = useWatch({ control: form.control, name: 'birthDate' })
 
   const createMutation = useMutation({
     mutationFn: (payload: CreatePatientInput) => createPatient(payload, session),
@@ -374,7 +375,7 @@ export function PatientsPage({ mode = 'list' }: { mode?: 'list' | 'create' }) {
             >
               <AppDatePicker
                 error={form.formState.errors.birthDate?.message}
-                value={form.watch('birthDate')}
+                value={birthDate}
                 onChange={(value) => form.setValue('birthDate', value, { shouldDirty: true, shouldValidate: true })}
               />
             </Field>

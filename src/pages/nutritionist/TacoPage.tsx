@@ -80,7 +80,7 @@ export function TacoPage() {
     }),
   })
 
-  const foods = foodsQuery.data?.foods ?? []
+  const foods = useMemo(() => foodsQuery.data?.foods ?? [], [foodsQuery.data?.foods])
   const total = foodsQuery.data?.count ?? 0
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const selectedFood = foods.find((food) => food.id === selectedFoodId) ?? foods[0] ?? null
@@ -91,15 +91,6 @@ export function TacoPage() {
     ],
     [categoriesQuery.data],
   )
-
-  useEffect(() => {
-    if (!selectedFoodId && foods[0]) {
-      setSelectedFoodId(foods[0].id)
-    }
-    if (selectedFoodId && foods.length > 0 && !foods.some((food) => food.id === selectedFoodId)) {
-      setSelectedFoodId(foods[0].id)
-    }
-  }, [foods, selectedFoodId])
 
   return (
     <div className="space-y-6">

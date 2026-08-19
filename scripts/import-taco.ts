@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 import * as XLSX from 'xlsx'
@@ -375,7 +375,7 @@ function dedupeFoods(foods: TacoFoodInput[]) {
 }
 
 async function upsertFoodsByKey(
-  supabase: any,
+  supabase: SupabaseClient,
   foods: TacoFoodInput[],
   keyField: 'code' | 'normalized_name',
 ): Promise<UpsertSummary> {
