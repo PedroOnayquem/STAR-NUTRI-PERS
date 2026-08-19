@@ -1,4 +1,4 @@
-const CACHE_NAME = 'star-nutri-static-v3'
+const CACHE_NAME = 'star-nutri-static-v4'
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -95,7 +95,8 @@ async function staleWhileRevalidate(request) {
   const cached = await cache.match(request)
   const fetched = fetch(request)
     .then((response) => {
-      if (response.ok) {
+      const contentType = response.headers.get('content-type') ?? ''
+      if (response.ok && !contentType.includes('text/html')) {
         cache.put(request, response.clone())
       }
       return response

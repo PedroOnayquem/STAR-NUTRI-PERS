@@ -3,6 +3,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 
 COPY package*.json ./
+COPY vendor/xlsx-0.20.3.tgz vendor/xlsx-0.20.3.tgz
 RUN npm ci
 
 COPY . .

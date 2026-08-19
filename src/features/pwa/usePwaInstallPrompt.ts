@@ -11,6 +11,8 @@ type BeforeInstallPromptEvent = Event & {
 }
 
 function isStandaloneMode() {
+  if (typeof window === 'undefined') return false
+
   return (
     window.matchMedia('(display-mode: standalone)').matches ||
     window.matchMedia('(display-mode: fullscreen)').matches ||
@@ -19,6 +21,8 @@ function isStandaloneMode() {
 }
 
 function isIosDevice() {
+  if (typeof window === 'undefined') return false
+
   const ua = window.navigator.userAgent.toLowerCase()
   return /iphone|ipad|ipod/.test(ua)
 }
@@ -26,13 +30,10 @@ function isIosDevice() {
 export function usePwaInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] =
     useState<BeforeInstallPromptEvent | null>(null)
-  const [isInstalled, setIsInstalled] = useState(false)
-  const [isIos, setIsIos] = useState(false)
+  const [isInstalled, setIsInstalled] = useState(isStandaloneMode)
+  const [isIos] = useState(isIosDevice)
 
   useEffect(() => {
-    setIsInstalled(isStandaloneMode())
-    setIsIos(isIosDevice())
-
     const onBeforeInstallPrompt = (event: Event) => {
       event.preventDefault()
       setDeferredPrompt(event as BeforeInstallPromptEvent)

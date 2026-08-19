@@ -6,11 +6,14 @@ from .core.config import settings
 
 
 def create_app() -> FastAPI:
+    is_production = settings.app_env.strip().lower() == "production"
+
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=None if is_production else "/docs",
+        redoc_url=None if is_production else "/redoc",
+        openapi_url=None if is_production else "/openapi.json",
     )
 
     app.add_middleware(

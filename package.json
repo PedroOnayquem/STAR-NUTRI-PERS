@@ -4,8 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "start": "docker compose up -d --build",
+    "stop": "docker compose down",
+    "status": "docker compose ps",
+    "logs": "docker compose logs -f",
     "dev": "vite",
-    "dev:api": ".venv\\Scripts\\python.exe -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:api": "docker compose up --build backend",
+    "dev:api:docker": "docker compose up --build backend",
+    "dev:api:local": "python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000",
     "docker:build": "docker compose build",
     "docker:down": "docker compose down",
     "docker:up": "docker compose up --build",
@@ -30,7 +36,7 @@
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.5.0",
-    "xlsx": "^0.18.5",
+    "xlsx": "file:vendor/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },
   "devDependencies": {
