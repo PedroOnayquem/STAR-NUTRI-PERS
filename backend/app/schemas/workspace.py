@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -9,7 +11,7 @@ class UpdatePatientRequest(BaseModel):
     objective: str | None = Field(default=None, max_length=240)
     notes: str | None = Field(default=None, max_length=1000)
     is_active: bool | None = None
-    access_status: str | None = None
+    access_status: Literal["ACTIVE", "EXPIRED"] | None = None
 
 
 class UpdateMyPatientProfileRequest(BaseModel):
@@ -21,4 +23,4 @@ class UpdateMyPatientProfileRequest(BaseModel):
 
 
 class ActivatePatientRequest(BaseModel):
-    trial_days: int | None = Field(default=None)
+    trial_days: Literal[7, 14, 30] | None = Field(default=None)

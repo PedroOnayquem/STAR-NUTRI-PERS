@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 import re
 from time import perf_counter
@@ -14,6 +15,7 @@ from fastapi import HTTPException, UploadFile, status
 
 from ..core.config import settings
 from ..schemas.workspace import UpdateMyPatientProfileRequest, UpdatePatientRequest
+from .auth_policy import assert_password_change_complete
 
 
 MAX_NUTRITIONIST_IMAGE_BYTES = 5 * 1024 * 1024
@@ -157,7 +159,9 @@ class SupabaseWorkspaceService:
                 detail="Token invalido ou expirado.",
             )
 
-        return response.json()
+        auth_user = response.json()
+        assert_password_change_complete(auth_user)
+        return auth_user
 
     async def get_profile(self, user_id: str) -> dict:
         rows = await self._request(
@@ -666,6 +670,63 @@ class SupabaseWorkspaceService:
             },
         }
 
+    async def get_ai_guardrail_metrics(self, token: str, *, days: int = 30) -> dict:
+        if days not in {7, 30, 90}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Periodo deve ser 7, 30 ou 90 dias.",
+            )
+        profile = await self.get_authenticated_profile(token)
+        if profile["role"] != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Apenas administradores acessam metricas de seguranca da IA.",
+            )
+
+        since = datetime.now(UTC) - timedelta(days=days)
+        events: list[dict] = []
+        page_size = 1000
+        while len(events) < 5000:
+            page = await self._request(
+                "GET",
+                "/rest/v1/ai_guardrail_events",
+                params={
+                    "created_at": f"gte.{since.isoformat()}",
+                    "select": "id,stage,category,action,severity,rule_ids,created_at",
+                    "order": "created_at.desc,id.desc",
+                    "limit": str(page_size),
+                    "offset": str(len(events)),
+                },
+            )
+            events.extend(page)
+            if len(page) < page_size:
+                break
+        actions = Counter(item.get("action") or "unknown" for item in events)
+        categories = Counter(item.get("category") or "unknown" for item in events)
+        stages = Counter(item.get("stage") or "unknown" for item in events)
+        severities = Counter(item.get("severity") or "unknown" for item in events)
+        return {
+            "period_days": days,
+            "summary": {
+                "events": len(events),
+                "blocked": actions["blocked"],
+                "safe_completed": actions["safe_completed"],
+                "redacted_outputs": actions["redacted"],
+                "provider_failures": actions["failed"],
+            },
+            "categories": [
+                {"category": key, "count": value}
+                for key, value in categories.most_common()
+            ],
+            "stages": [{"stage": key, "count": value} for key, value in stages.most_common()],
+            "severities": [
+                {"severity": key, "count": value}
+                for key, value in severities.most_common()
+            ],
+            "recent_events": events[:100],
+            "truncated": len(events) == 5000,
+        }
+
     async def get_patient_context_for_nutritionist(
         self,
         token: str,
@@ -729,7 +790,7 @@ class SupabaseWorkspaceService:
         patient_profile = profile
         patient_id = patient["id"]
 
-        diets, workouts, variable_metrics = await asyncio.gather(
+        diets, workouts, variable_metrics, imports = await asyncio.gather(
             self._request(
                 "GET",
                 "/rest/v1/diets",
@@ -757,9 +818,26 @@ class SupabaseWorkspaceService:
                 "/rest/v1/patient_variable_metrics",
                 params={
                     "patient_id": f"eq.{patient_id}",
-                    "select": "id,patient_id,name,value,unit,recorded_at,created_at",
+                    "select": (
+                        "id,patient_id,name,value,unit,recorded_at,created_at,"
+                        "source_type,source_import_id"
+                    ),
                     "order": "recorded_at.desc,created_at.desc",
                     "limit": "20",
+                },
+            ),
+            self._request(
+                "GET",
+                "/rest/v1/patient_imports",
+                params={
+                    "patient_id": f"eq.{patient_id}",
+                    "status": "in.(processed,linked)",
+                    "select": (
+                        "id,source_type,extracted_payload,confidence_payload,status,"
+                        "original_file_name,file_type,created_at"
+                    ),
+                    "order": "created_at.desc",
+                    "limit": "12",
                 },
             ),
         )
@@ -797,7 +875,7 @@ class SupabaseWorkspaceService:
             "nutritionist_chats": [],
             "patient_chats": [],
             "appointments": [],
-            "imports": [],
+            "imports": imports,
             "recent_professional_messages": [],
             "recent_personal_messages": [],
         }
@@ -973,16 +1051,7 @@ class SupabaseWorkspaceService:
             exclude_unset=True,
             exclude={"full_name", "phone"},
         )
-        if "access_status" in patient_payload:
-            access_status = patient_payload["access_status"]
-            if access_status not in {"TRIAL", "ACTIVE", "EXPIRED"}:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Status do paciente inválido.",
-                )
-        if patient_payload.get("is_active") is False:
-            patient_payload["access_status"] = "EXPIRED"
-            patient_payload["expired_at"] = datetime.now(UTC).isoformat()
+        patient_payload = self._normalize_patient_access_update(patient_payload)
         if patient_payload:
             updated = await self._request(
                 "PATCH",
@@ -1008,6 +1077,45 @@ class SupabaseWorkspaceService:
 
         profile_row = await self.get_profile(patient["user_id"])
         return {**patient, "profile": profile_row}
+
+    def _normalize_patient_access_update(self, payload: dict) -> dict:
+        normalized = dict(payload)
+        access_status = normalized.pop("access_status", None)
+        is_active = normalized.pop("is_active", None)
+
+        if access_status not in {None, "ACTIVE", "EXPIRED"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Status do paciente inválido.",
+            )
+        if (
+            access_status == "ACTIVE" and is_active is False
+        ) or (
+            access_status == "EXPIRED" and is_active is True
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Status e atividade do paciente são incompatíveis.",
+            )
+
+        if access_status == "ACTIVE" or is_active is True:
+            normalized.update(
+                {
+                    "access_status": "ACTIVE",
+                    "activated_at": datetime.now(UTC).isoformat(),
+                    "expired_at": None,
+                    "is_active": True,
+                }
+            )
+        elif access_status == "EXPIRED" or is_active is False:
+            normalized.update(
+                {
+                    "access_status": "EXPIRED",
+                    "expired_at": datetime.now(UTC).isoformat(),
+                    "is_active": False,
+                }
+            )
+        return normalized
 
     async def get_patient_record_for_nutritionist(
         self,
@@ -1441,27 +1549,43 @@ class SupabaseWorkspaceService:
             )
 
         trial_days = getattr(payload, "trial_days", None) if payload else None
+
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/patients",
+            params={"id": f"eq.{patient_id}", "select": "*"},
+            json=self._patient_activation_payload(trial_days),
+            prefer="return=representation",
+        )
+        updated = await self._refresh_patient_access_status(rows[0])
+        profile_row = await self.get_profile(updated["user_id"])
+        return {**updated, "profile": profile_row}
+
+    def _patient_activation_payload(self, trial_days: int | None) -> dict:
         if trial_days is not None and trial_days not in TRIAL_ALLOWED_DAYS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A duração do Trial deve ser 7, 14 ou 30 dias.",
             )
 
-        rows = await self._request(
-            "PATCH",
-            "/rest/v1/patients",
-            params={"id": f"eq.{patient_id}", "select": "*"},
-            json={
-                "access_status": "ACTIVE",
-                "activated_at": datetime.now(UTC).isoformat(),
+        activated_at = datetime.now(UTC)
+        if trial_days is not None:
+            return {
+                "access_status": "TRIAL",
+                "trial_days": trial_days,
+                "trial_started_at": activated_at.isoformat(),
+                "trial_ends_at": (activated_at + timedelta(days=trial_days)).isoformat(),
+                "activated_at": None,
                 "expired_at": None,
                 "is_active": True,
-            },
-            prefer="return=representation",
-        )
-        updated = await self._refresh_patient_access_status(rows[0])
-        profile_row = await self.get_profile(updated["user_id"])
-        return {**updated, "profile": profile_row}
+            }
+
+        return {
+            "access_status": "ACTIVE",
+            "activated_at": activated_at.isoformat(),
+            "expired_at": None,
+            "is_active": True,
+        }
 
     async def insert_ai_action_log(self, payload: dict) -> dict:
         rows = await self._request(
@@ -1470,7 +1594,16 @@ class SupabaseWorkspaceService:
             json=payload,
             prefer="return=representation",
         )
-        return await self._get_row_by_id("diet_meal_items", rows[0]["id"])
+        return await self._get_row_by_id("ai_action_logs", rows[0]["id"])
+
+    async def insert_ai_guardrail_event(self, payload: dict) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/ai_guardrail_events",
+            json=payload,
+            prefer="return=representation",
+        )
+        return rows[0]
 
     async def list_conversation_memories(
         self,
@@ -1510,7 +1643,7 @@ class SupabaseWorkspaceService:
             params={"on_conflict": "conversation_id,user_id,chat_type"},
             prefer="resolution=merge-duplicates,return=representation",
         )
-        return await self._get_row_by_id("patient_appointments", rows[0]["id"])
+        return await self._get_row_by_id("ai_conversation_memories", rows[0]["id"])
 
     async def list_ai_action_logs_for_context(
         self,
@@ -1592,7 +1725,7 @@ class SupabaseWorkspaceService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Não foi possível confirmar o registro salvo em {table}.",
             )
-        return await self._get_row_by_id("patient_variable_metrics", rows[0]["id"])
+        return rows[0]
 
     async def create_health_condition_record(
         self,
@@ -1625,7 +1758,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return await self._get_row_by_id("diet_meals", rows[0]["id"])
+        return await self._get_row_by_id("patient_health_conditions", rows[0]["id"])
 
     async def create_training_plan_record(
         self,
@@ -1653,7 +1786,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return await self._get_row_by_id("diet_meals", rows[0]["id"])
+        return await self._get_row_by_id("training_plans", rows[0]["id"])
 
     async def create_training_day_records(
         self,
@@ -1867,12 +2000,64 @@ class SupabaseWorkspaceService:
         diet["meals"] = self._attach_items_to_meals(meals, items_by_meal)
         return diet
 
+    async def get_diet_record(self, diet_id: str) -> dict:
+        return await self._get_row_by_id("diets", diet_id)
+
+    async def create_diet_record(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        title: str,
+        description: str | None,
+        calories: float | None,
+        protein: float | None,
+        carbs: float | None,
+        fats: float | None,
+        water_goal_ml: float | None,
+        is_active: bool,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/diets",
+            json={
+                "nutritionist_id": nutritionist_id,
+                "patient_id": patient_id,
+                "title": title,
+                "description": description,
+                "calories": calories,
+                "protein": protein,
+                "carbs": carbs,
+                "fats": fats,
+                "water_goal_ml": water_goal_ml,
+                "is_active": is_active,
+            },
+            prefer="return=representation",
+        )
+        return await self._get_row_by_id("diets", rows[0]["id"])
+
+    async def update_diet_record(self, *, diet_id: str, payload: dict) -> dict:
+        rows = await self._request(
+            "PATCH",
+            "/rest/v1/diets",
+            params={"id": f"eq.{diet_id}", "select": "*"},
+            json=payload,
+            prefer="return=representation",
+        )
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Plano alimentar nao encontrado.",
+            )
+        return await self._get_row_by_id("diets", rows[0]["id"])
+
     async def create_diet_meal_record(
         self,
         *,
         diet_id: str,
         meal_name: str,
         foods: list[dict],
+        meal_time: str | None = None,
         notes: str | None = None,
     ) -> dict:
         rows = await self._request(
@@ -1881,6 +2066,7 @@ class SupabaseWorkspaceService:
             json={
                 "diet_id": diet_id,
                 "meal_name": meal_name,
+                "meal_time": meal_time,
                 "foods": foods,
                 "notes": notes,
             },
@@ -2003,7 +2189,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return await self._get_row_by_id("patient_health_conditions", rows[0]["id"])
+        return await self._get_row_by_id("diet_meal_items", rows[0]["id"])
 
     async def find_appointment(
         self,
@@ -2063,7 +2249,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return await self._get_row_by_id("training_plans", rows[0]["id"])
+        return await self._get_row_by_id("patient_appointments", rows[0]["id"])
 
     async def create_appointment_record(
         self,
@@ -2242,7 +2428,7 @@ class SupabaseWorkspaceService:
             },
             prefer="return=representation",
         )
-        return await self._get_row_by_id("workouts", rows[0]["id"])
+        return await self._get_row_by_id("nutritionist_chats", rows[0]["id"])
 
     async def create_patient_chat(
         self,
@@ -2583,7 +2769,7 @@ class SupabaseWorkspaceService:
         if patient.get("access_status") != "TRIAL":
             return False
         trial_ends_at = self._parse_datetime(patient.get("trial_ends_at"))
-        return bool(trial_ends_at and trial_ends_at <= datetime.now(UTC))
+        return trial_ends_at is None or trial_ends_at <= datetime.now(UTC)
 
     def _with_patient_access_metadata(self, patient: dict) -> dict:
         access = self._patient_access_payload(patient)
@@ -2600,7 +2786,9 @@ class SupabaseWorkspaceService:
             "ACTIVE" if patient.get("is_active") is not False else "EXPIRED"
         )
         trial_ends_at = self._parse_datetime(patient.get("trial_ends_at"))
-        if status_value == "TRIAL" and trial_ends_at and trial_ends_at <= datetime.now(UTC):
+        if status_value == "TRIAL" and (
+            trial_ends_at is None or trial_ends_at <= datetime.now(UTC)
+        ):
             status_value = "EXPIRED"
 
         days_remaining = 0

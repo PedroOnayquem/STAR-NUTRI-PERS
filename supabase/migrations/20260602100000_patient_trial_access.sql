@@ -1,3 +1,5 @@
+begin;
+
 alter table public.nutritionists
 add column if not exists default_patient_trial_days integer not null default 7;
 
@@ -51,23 +53,28 @@ create or replace function public.patient_has_premium_access(patient_id uuid)
 returns boolean
 language sql
 stable
-security definer
-set search_path = public, auth
+security invoker
+set search_path = ''
 as $$
   select exists (
     select 1
     from public.patients p
-    where p.id = patient_id
+    where p.id = $1
       and p.access_status in ('TRIAL', 'ACTIVE')
       and (
         p.access_status = 'ACTIVE'
         or p.trial_ends_at is null
         or p.trial_ends_at > now()
       )
+      and (
+        p.id = (select public.get_current_patient_id())
+        or p.nutritionist_id = (select public.get_current_nutritionist_id())
+        or (select public.is_admin())
+      )
   );
 $$;
 
-revoke execute on function public.patient_has_premium_access(uuid) from public;
+revoke execute on function public.patient_has_premium_access(uuid) from public, anon;
 grant execute on function public.patient_has_premium_access(uuid) to authenticated, service_role;
 
 drop policy if exists "Usuários autorizados veem dietas" on public.diets;
@@ -112,3 +119,5 @@ with check (
       and p.nutritionist_id = (select get_current_nutritionist_id())
   )
 );
+
+commit;
