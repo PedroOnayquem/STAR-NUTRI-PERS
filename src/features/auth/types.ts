@@ -19,6 +19,7 @@ export type AuthState = {
   loading: boolean
   profileLoading: boolean
   requiresPasswordChange: boolean
+  isPasswordRecovery: boolean
   error: string | null
 }
 
@@ -33,7 +34,7 @@ export type ChangePasswordInput = {
 }
 
 export type LoginResult = {
-  profile: AuthProfile
+  profile: AuthProfile | null
   requiresPasswordChange: boolean
 }
 

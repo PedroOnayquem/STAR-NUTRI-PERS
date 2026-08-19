@@ -3,6 +3,7 @@ from fastapi import HTTPException, status
 
 from ..core.config import settings
 from ..schemas.admin import CreateNutritionistRequest
+from .auth_policy import assert_password_change_complete
 
 
 class SupabaseAdminService:
@@ -49,7 +50,9 @@ class SupabaseAdminService:
                 detail="Invalid or expired access token.",
             )
 
-        return response.json()
+        auth_user = response.json()
+        assert_password_change_complete(auth_user)
+        return auth_user
 
     async def assert_admin(self, token: str) -> dict:
         auth_user = await self.get_user_from_access_token(token)
@@ -112,9 +115,8 @@ class SupabaseAdminService:
                         "email_confirm": True,
                         "user_metadata": {
                             "full_name": payload.full_name,
-                            "role": "nutritionist",
-                            "must_change_password": True,
                         },
+                        "app_metadata": {"must_change_password": True},
                     },
                 )
 

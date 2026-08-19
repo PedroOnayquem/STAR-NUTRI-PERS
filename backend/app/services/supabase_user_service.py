@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..core.config import settings
 from ..schemas.patients import CreatePatientRequest
+from .auth_policy import assert_password_change_complete, requires_password_change
 from .bioimpedance_metrics import imported_metrics_to_rows
 
 
@@ -29,7 +30,12 @@ class SupabaseUserService:
             "Content-Type": "application/json",
         }
 
-    async def get_user_from_access_token(self, token: str) -> dict:
+    async def get_user_from_access_token(
+        self,
+        token: str,
+        *,
+        allow_password_change: bool = False,
+    ) -> dict:
         try:
             async with httpx.AsyncClient(timeout=20) as client:
                 response = await client.get(
@@ -51,7 +57,50 @@ class SupabaseUserService:
                 detail="Invalid or expired access token.",
             )
 
-        return response.json()
+        auth_user = response.json()
+        if not allow_password_change:
+            assert_password_change_complete(auth_user)
+        return auth_user
+
+    async def change_own_password(self, token: str, password: str) -> None:
+        auth_user = await self.get_user_from_access_token(
+            token,
+            allow_password_change=True,
+        )
+        user_id = auth_user.get("id")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Usuário não encontrado.",
+            )
+        if not requires_password_change(auth_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Esta conta não possui uma troca de senha provisória pendente.",
+            )
+
+        app_metadata = dict(auth_user.get("app_metadata") or {})
+        app_metadata["must_change_password"] = False
+        app_metadata["password_changed_at"] = datetime.now(UTC).isoformat()
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.put(
+                    f"{self.supabase_url}/auth/v1/admin/users/{user_id}",
+                    headers=self.service_headers,
+                    json={
+                        "password": password,
+                        "app_metadata": app_metadata,
+                    },
+                )
+        except httpx.RequestError:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Não foi possível atualizar a senha. Tente novamente em instantes.",
+            ) from None
+
+        if response.status_code >= 400:
+            self._raise_supabase_error(response)
 
     async def assert_nutritionist(self, token: str) -> dict:
         auth_user = await self.get_user_from_access_token(token)
@@ -140,9 +189,8 @@ class SupabaseUserService:
                         "email_confirm": True,
                         "user_metadata": {
                             "full_name": payload.full_name,
-                            "role": "patient",
-                            "must_change_password": True,
                         },
+                        "app_metadata": {"must_change_password": True},
                     },
                 )
 
@@ -335,6 +383,23 @@ class SupabaseUserService:
         )
         if import_update.status_code >= 400:
             self._raise_supabase_error(import_update)
+
+        # Linking is part of the real import lifecycle. Failure to write
+        # telemetry must not roll back an otherwise valid patient creation.
+        try:
+            await client.post(
+                f"{self.supabase_url}/rest/v1/patient_import_events",
+                headers={**self.service_headers, "Prefer": "return=minimal"},
+                json={
+                    "import_id": import_id,
+                    "patient_id": patient_id,
+                    "nutritionist_id": nutritionist_id,
+                    "event_type": "linked_to_patient",
+                    "stage": "patient_link",
+                },
+            )
+        except httpx.RequestError:
+            pass
 
     async def _delete_auth_user(self, client: httpx.AsyncClient, user_id: str) -> None:
         await client.delete(

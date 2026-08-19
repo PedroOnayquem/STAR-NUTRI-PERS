@@ -2,16 +2,27 @@ import type { ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import type { UserRole } from '../features/auth/types'
 import { useAuth } from '../features/auth/useAuth'
-import { changePasswordPath, getRolePath } from './paths'
+import { changePasswordPath, getRolePath, resetPasswordPath } from './paths'
 
 export function PublicOnlyRoute({ children }: { children: ReactNode }) {
-  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
+  const {
+    isPasswordRecovery,
+    loading,
+    profile,
+    profileLoading,
+    requiresPasswordChange,
+    session,
+  } = useAuth()
 
   if (loading || profileLoading) {
     return <FullPageLoading />
   }
 
   if (session) {
+    if (isPasswordRecovery) {
+      return <Navigate replace to={resetPasswordPath} />
+    }
+
     if (requiresPasswordChange) {
       return <Navigate replace to={changePasswordPath} />
     }
@@ -27,7 +38,14 @@ export function PublicOnlyRoute({ children }: { children: ReactNode }) {
 }
 
 export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) {
-  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
+  const {
+    isPasswordRecovery,
+    loading,
+    profile,
+    profileLoading,
+    requiresPasswordChange,
+    session,
+  } = useAuth()
   const location = useLocation()
 
   if (loading || profileLoading) {
@@ -36,6 +54,10 @@ export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) 
 
   if (!session) {
     return <Navigate replace state={{ from: location }} to="/login" />
+  }
+
+  if (isPasswordRecovery) {
+    return <Navigate replace to={resetPasswordPath} />
   }
 
   if (requiresPasswordChange) {
@@ -54,7 +76,14 @@ export function ProtectedRoute({ allowedRoles }: { allowedRoles?: UserRole[] }) 
 }
 
 export function RoleRedirect() {
-  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
+  const {
+    isPasswordRecovery,
+    loading,
+    profile,
+    profileLoading,
+    requiresPasswordChange,
+    session,
+  } = useAuth()
 
   if (loading || profileLoading) {
     return <FullPageLoading />
@@ -62,6 +91,10 @@ export function RoleRedirect() {
 
   if (!session) {
     return <Navigate replace to="/login" />
+  }
+
+  if (isPasswordRecovery) {
+    return <Navigate replace to={resetPasswordPath} />
   }
 
   if (requiresPasswordChange) {
@@ -76,7 +109,14 @@ export function RoleRedirect() {
 }
 
 export function PasswordChangeRoute() {
-  const { loading, profile, profileLoading, requiresPasswordChange, session } = useAuth()
+  const {
+    isPasswordRecovery,
+    loading,
+    profile,
+    profileLoading,
+    requiresPasswordChange,
+    session,
+  } = useAuth()
 
   if (loading || profileLoading) {
     return <FullPageLoading />
@@ -84,6 +124,10 @@ export function PasswordChangeRoute() {
 
   if (!session) {
     return <Navigate replace to="/login" />
+  }
+
+  if (isPasswordRecovery) {
+    return <Navigate replace to={resetPasswordPath} />
   }
 
   if (!requiresPasswordChange) {

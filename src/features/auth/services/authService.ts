@@ -1,5 +1,10 @@
-import type { User } from '@supabase/supabase-js'
+import {
+  isAuthRetryableFetchError,
+  type Session,
+  type User,
+} from '@supabase/supabase-js'
 import { USER_MESSAGES, sanitizeUserMessage } from '../../../constants/messages'
+import { apiRequest } from '../../../lib/api'
 import { supabase } from '../../../lib/supabase'
 import type {
   ChangePasswordInput,
@@ -23,6 +28,9 @@ export async function signIn(input: LoginInput) {
   })
 
   if (error) {
+    if (isAuthRetryableFetchError(error)) {
+      throw new Error(USER_MESSAGES.connectionError)
+    }
     throw new Error(sanitizeUserMessage(error.message, USER_MESSAGES.loginError))
   }
 
@@ -42,7 +50,7 @@ function normalizeLoginIdentifier(identifier: string) {
 export async function requestPasswordReset(input: ForgotPasswordInput) {
   const client = assertSupabase()
   const { error } = await client.auth.resetPasswordForEmail(input.email.trim(), {
-    redirectTo: `${window.location.origin}/login`,
+    redirectTo: `${window.location.origin}/auth/reset-password`,
   })
 
   if (error) {
@@ -71,30 +79,52 @@ export async function getInitialSession() {
 }
 
 export function needsPasswordChange(user: User | null | undefined) {
+  const appFlag = user?.app_metadata?.must_change_password
+  if (appFlag !== undefined) {
+    return appFlag === true || appFlag === 'true'
+  }
+
   const flag = user?.user_metadata?.must_change_password
   return flag === true || flag === 'true'
 }
 
-export async function updatePassword(input: ChangePasswordInput) {
+export async function updatePassword(
+  input: ChangePasswordInput,
+  session: Session | null,
+) {
   const client = assertSupabase()
-  const currentUserResponse = await client.auth.getUser()
-
-  if (currentUserResponse.error) {
-    throw new Error(sanitizeUserMessage(currentUserResponse.error.message, USER_MESSAGES.missingSession))
-  }
-
-  const currentMetadata = currentUserResponse.data.user?.user_metadata ?? {}
-  const { data, error } = await client.auth.updateUser({
-    password: input.password,
-    data: {
-      ...currentMetadata,
-      must_change_password: false,
-      password_changed_at: new Date().toISOString(),
-    },
+  await apiRequest('/api/auth/change-password', session, {
+    body: JSON.stringify({ password: input.password }),
+    method: 'POST',
   })
 
-  if (error) {
-    throw new Error(sanitizeUserMessage(error.message, 'Não foi possível atualizar a senha.'))
+  const { data, error } = await client.auth.refreshSession()
+
+  if (error || !data.user) {
+    throw new Error(
+      sanitizeUserMessage(
+        error?.message,
+        'Senha atualizada. Entre novamente para continuar.',
+      ),
+    )
+  }
+
+  return data.user
+}
+
+export async function updateRecoveredPassword(input: ChangePasswordInput) {
+  const client = assertSupabase()
+  const { data, error } = await client.auth.updateUser({
+    password: input.password,
+  })
+
+  if (error || !data.user) {
+    throw new Error(
+      sanitizeUserMessage(
+        error?.message,
+        'Não foi possível atualizar a senha. Solicite um novo link de recuperação.',
+      ),
+    )
   }
 
   return data.user

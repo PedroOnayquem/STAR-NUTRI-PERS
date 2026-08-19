@@ -10,6 +10,7 @@ import type {
 
 export type AuthContextValue = AuthState & {
   changePassword: (input: ChangePasswordInput) => Promise<AuthProfile | null>
+  resetRecoveredPassword: (input: ChangePasswordInput) => Promise<void>
   login: (input: LoginInput) => Promise<LoginResult>
   recoverPassword: (input: ForgotPasswordInput) => Promise<void>
   logout: () => Promise<void>

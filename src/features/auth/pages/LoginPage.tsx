@@ -38,6 +38,10 @@ export function LoginPage() {
         return
       }
 
+      if (!result.profile) {
+        throw new Error('Seu perfil ainda não está ativo. Fale com o responsável pela sua conta.')
+      }
+
       const redirectTo =
         (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ??
         getRolePath(result.profile.role)

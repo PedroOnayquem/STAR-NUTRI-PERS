@@ -16,6 +16,7 @@ import {
   signIn,
   signOut,
   updatePassword,
+  updateRecoveredPassword,
 } from './services/authService'
 import { getCurrentProfile } from './services/profileService'
 import type {
@@ -27,12 +28,18 @@ import type {
 } from './types'
 import { AuthContext, type AuthContextValue } from './authContextValue'
 
+const PASSWORD_RECOVERY_STORAGE_KEY = 'star-nutri-password-recovery'
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<AuthProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const [profileLoading, setProfileLoading] = useState(false)
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(
+    () => sessionStorage.getItem(PASSWORD_RECOVERY_STORAGE_KEY) === 'true',
+  )
   const [error, setError] = useState<string | null>(null)
+  const passwordRecoveryRef = useRef(isPasswordRecovery)
   const profileCacheRef = useRef(new Map<string, AuthProfile | null>())
   const profileRequestRef = useRef<{
     promise: Promise<AuthProfile | null>
@@ -40,11 +47,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } | null>(null)
   const requiresPasswordChange = needsPasswordChange(session?.user)
 
+  const setPasswordRecoveryMode = useCallback((active: boolean) => {
+    passwordRecoveryRef.current = active
+    setIsPasswordRecovery(active)
+    if (active) {
+      sessionStorage.setItem(PASSWORD_RECOVERY_STORAGE_KEY, 'true')
+    } else {
+      sessionStorage.removeItem(PASSWORD_RECOVERY_STORAGE_KEY)
+    }
+  }, [])
+
+  const shouldDeferProfile = useCallback((nextSession: Session | null) => {
+    return (
+      needsPasswordChange(nextSession?.user) ||
+      passwordRecoveryRef.current
+    )
+  }, [])
+
   const loadProfile = useCallback(async (
     nextSession: Session | null,
     options?: { force?: boolean },
   ) => {
     if (!nextSession?.user) {
+      setProfile(null)
+      return null
+    }
+
+    if (shouldDeferProfile(nextSession)) {
       setProfile(null)
       return null
     }
@@ -59,6 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const currentRequest = profileRequestRef.current
     if (!options?.force && currentRequest?.userId === userId) {
       const cached = await currentRequest.promise
+      if (shouldDeferProfile(nextSession)) {
+        setProfile(null)
+        return null
+      }
       setProfile(cached)
       return cached
     }
@@ -71,6 +104,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     profileRequestRef.current = { promise: request, userId }
     try {
       const nextProfile = await request
+      if (shouldDeferProfile(nextSession)) {
+        setProfile(null)
+        return null
+      }
       setProfile(nextProfile)
       return nextProfile
     } finally {
@@ -79,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setProfileLoading(false)
     }
-  }, [])
+  }, [shouldDeferProfile])
 
   useEffect(() => {
     let mounted = true
@@ -91,7 +128,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return
         }
         setSession(nextSession)
-        await loadProfile(nextSession)
+        if (shouldDeferProfile(nextSession)) {
+          setProfile(null)
+        } else {
+          await loadProfile(nextSession)
+        }
       } catch (caught) {
         setError(friendlyErrorMessage(caught, USER_MESSAGES.missingSession))
       } finally {
@@ -111,8 +152,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
+
+      if (event === 'PASSWORD_RECOVERY') {
+        setPasswordRecoveryMode(true)
+        setProfile(null)
+        return
+      }
+
+      if (event === 'SIGNED_OUT') {
+        setPasswordRecoveryMode(false)
+        profileCacheRef.current.clear()
+      }
+
+      if (shouldDeferProfile(nextSession)) {
+        setProfile(null)
+        return
+      }
+
       loadProfile(nextSession).catch((caught) => {
         setError(friendlyErrorMessage(caught, USER_MESSAGES.actionError))
       })
@@ -122,33 +180,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       mounted = false
       subscription.unsubscribe()
     }
-  }, [loadProfile])
+  }, [loadProfile, setPasswordRecoveryMode, shouldDeferProfile])
 
   const login = useCallback(async (input: LoginInput): Promise<LoginResult> => {
     setError(null)
     const { session: nextSession } = await signIn(input)
+    setPasswordRecoveryMode(false)
     setSession(nextSession)
-    const nextProfile = await loadProfile(nextSession)
 
-    if (!nextProfile) {
-      await signOut()
+    const passwordChangeRequired = needsPasswordChange(nextSession?.user)
+    if (passwordChangeRequired) {
+      setProfile(null)
+      return {
+        profile: null,
+        requiresPasswordChange: true,
+      }
+    }
+
+    try {
+      const nextProfile = await loadProfile(nextSession)
+
+      if (!nextProfile) {
+        throw new Error('Seu perfil ainda não está ativo. Fale com o responsável pela sua conta.')
+      }
+
+      return {
+        profile: nextProfile,
+        requiresPasswordChange: false,
+      }
+    } catch (caught) {
+      await signOut().catch(() => undefined)
+      if (nextSession?.user.id) {
+        profileCacheRef.current.delete(nextSession.user.id)
+      }
       setSession(null)
-      throw new Error('Seu perfil ainda não está ativo. Fale com o responsável pela sua conta.')
+      setProfile(null)
+      throw caught
     }
-
-    return {
-      profile: nextProfile,
-      requiresPasswordChange: needsPasswordChange(nextSession?.user),
-    }
-  }, [loadProfile])
+  }, [loadProfile, setPasswordRecoveryMode])
 
   const changePassword = useCallback(async (input: ChangePasswordInput) => {
     setError(null)
-    await updatePassword(input)
+    await updatePassword(input, session)
     const nextSession = await getInitialSession()
     setSession(nextSession)
     return await loadProfile(nextSession)
-  }, [loadProfile])
+  }, [loadProfile, session])
+
+  const resetRecoveredPassword = useCallback(async (input: ChangePasswordInput) => {
+    setError(null)
+    if (!session || !passwordRecoveryRef.current) {
+      throw new Error(
+        'Este link de recuperação é inválido ou expirou. Solicite um novo link.',
+      )
+    }
+
+    if (needsPasswordChange(session.user)) {
+      await updatePassword(input, session)
+    } else {
+      await updateRecoveredPassword(input)
+    }
+
+    const nextSession = await getInitialSession()
+    setSession(nextSession)
+    setPasswordRecoveryMode(false)
+    try {
+      await loadProfile(nextSession)
+    } catch (caught) {
+      setError(friendlyErrorMessage(caught, USER_MESSAGES.actionError))
+    }
+  }, [loadProfile, session, setPasswordRecoveryMode])
 
   const recoverPassword = useCallback(async (input: ForgotPasswordInput) => {
     setError(null)
@@ -158,10 +259,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     setError(null)
     await signOut()
+    setPasswordRecoveryMode(false)
     profileCacheRef.current.clear()
     setSession(null)
     setProfile(null)
-  }, [])
+  }, [setPasswordRecoveryMode])
 
   const refreshProfile = useCallback(async () => {
     return loadProfile(session, { force: true })
@@ -175,8 +277,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       profileLoading,
       requiresPasswordChange,
+      isPasswordRecovery,
       error,
       changePassword,
+      resetRecoveredPassword,
       login,
       recoverPassword,
       logout,
@@ -185,6 +289,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       changePassword,
       error,
+      isPasswordRecovery,
       loading,
       login,
       logout,
@@ -192,6 +297,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profileLoading,
       recoverPassword,
       refreshProfile,
+      resetRecoveredPassword,
       requiresPasswordChange,
       session,
     ],
