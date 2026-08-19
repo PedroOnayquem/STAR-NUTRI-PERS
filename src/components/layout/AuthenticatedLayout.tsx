@@ -4,6 +4,7 @@ import {
   Bot,
   BookOpen,
   CalendarDays,
+  FileClock,
   ChevronRight,
   LayoutDashboard,
   LogOut,
@@ -15,7 +16,7 @@ import {
   UserRound,
   Users,
 } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useAuth } from '../../features/auth/useAuth'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/Button'
@@ -29,10 +30,12 @@ const navByRole = {
   admin: [
     { to: '/admin', label: 'Painel administrativo', icon: <Shield size={18} />, preload: () => import('../../pages/AdminPage') },
     { to: '/admin/users', label: 'Usuários', icon: <Users size={18} />, preload: () => import('../../pages/AdminPage') },
+    { to: '/admin/files', label: 'Arquivos', icon: <FileClock size={18} />, preload: () => import('../../pages/FileMonitoringPage') },
   ],
   nutritionist: [
     { to: '/nutritionist', label: 'Dashboard', icon: <LayoutDashboard size={18} />, preload: () => import('../../pages/nutritionist/NutritionistDashboardPage') },
     { to: '/nutritionist/patients', label: 'Pacientes', icon: <Users size={18} />, preload: () => import('../../pages/nutritionist/PatientsPage') },
+    { to: '/nutritionist/files', label: 'Arquivos', icon: <FileClock size={18} />, preload: () => import('../../pages/FileMonitoringPage') },
     { to: '/nutritionist/taco', label: 'Tabela TACO', icon: <BookOpen size={18} />, preload: () => import('../../pages/nutritionist/TacoPage') },
     { to: '/nutritionist/chat', label: 'Chat IA', icon: <Bot size={18} />, preload: () => import('../../pages/nutritionist/NutritionistChatPage') },
     { to: '/nutritionist/profile', label: 'Perfil', icon: <UserRound size={18} />, preload: () => import('../../pages/nutritionist/NutritionistProfilePage') },
@@ -253,11 +256,10 @@ function ProfileAvatar({
   name?: string | null
 }) {
   const resolvedImageUrl = resolveNutritionistAvatarUrl(imageUrl)
-  const [imageFailed, setImageFailed] = useState(false)
-
-  useEffect(() => {
-    setImageFailed(false)
-  }, [resolvedImageUrl])
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null)
+  const imageFailed = Boolean(
+    resolvedImageUrl && failedImageUrl === resolvedImageUrl,
+  )
 
   return (
     <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/60 bg-white/80 text-sm font-black text-emerald-800 shadow-sm dark:border-white/10 dark:bg-slate-950/50 dark:text-emerald-100">
@@ -265,7 +267,7 @@ function ProfileAvatar({
         <img
           alt={name ?? 'Perfil'}
           className="h-full w-full object-cover"
-          onError={() => setImageFailed(true)}
+          onError={() => setFailedImageUrl(resolvedImageUrl ?? null)}
           src={resolvedImageUrl}
         />
       ) : (

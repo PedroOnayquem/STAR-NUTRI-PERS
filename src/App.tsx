@@ -17,9 +17,11 @@ import {
 } from './routes/routeGuards'
 
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })))
+const FileMonitoringPage = lazy(() => import('./pages/FileMonitoringPage').then((module) => ({ default: module.FileMonitoringPage })))
 const ChangeTemporaryPasswordPage = lazy(() => import('./features/auth/pages/ChangeTemporaryPasswordPage').then((module) => ({ default: module.ChangeTemporaryPasswordPage })))
 const ForgotPasswordPage = lazy(() => import('./features/auth/pages/ForgotPasswordPage').then((module) => ({ default: module.ForgotPasswordPage })))
 const LoginPage = lazy(() => import('./features/auth/pages/LoginPage').then((module) => ({ default: module.LoginPage })))
+const ResetPasswordPage = lazy(() => import('./features/auth/pages/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage })))
 const NutritionistChatPage = lazy(() => import('./pages/nutritionist/NutritionistChatPage').then((module) => ({ default: module.NutritionistChatPage })))
 const NutritionistDashboardPage = lazy(() => import('./pages/nutritionist/NutritionistDashboardPage').then((module) => ({ default: module.NutritionistDashboardPage })))
 const PatientDetailPage = lazy(() => import('./pages/nutritionist/PatientDetailPage').then((module) => ({ default: module.PatientDetailPage })))
@@ -69,6 +71,15 @@ function App() {
               path="/forgot-password"
             />
 
+            <Route
+              element={
+                <AuthLayout isDark={isDark} onToggleTheme={toggleTheme}>
+                  <ResetPasswordPage />
+                </AuthLayout>
+              }
+              path="/auth/reset-password"
+            />
+
             <Route element={<ProfileMissingPage />} path="/auth/profile-missing" />
 
             <Route element={<PasswordChangeRoute />}>
@@ -90,6 +101,7 @@ function App() {
               >
                 <Route element={<AdminPage />} path="/admin" />
                 <Route element={<AdminPage />} path="/admin/users" />
+                <Route element={<FileMonitoringPage />} path="/admin/files" />
               </Route>
             </Route>
 
@@ -106,6 +118,7 @@ function App() {
                 <Route element={<TacoPage />} path="/nutritionist/taco" />
                 <Route element={<NutritionistChatPage />} path="/nutritionist/chat" />
                 <Route element={<NutritionistProfilePage />} path="/nutritionist/profile" />
+                <Route element={<FileMonitoringPage />} path="/nutritionist/files" />
               </Route>
             </Route>
 
