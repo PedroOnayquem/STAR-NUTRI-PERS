@@ -46,7 +46,7 @@ class Settings:
             "OPENAI_BASE_URL",
             "https://api.openai.com/v1/chat/completions",
         )
-        self.openai_model: str = getenv("OPENAI_MODEL", "chat-latest")
+        self.openai_model: str = getenv("OPENAI_MODEL", "gpt-5.6-terra")
         self.openai_ocr_model: str = getenv("OPENAI_OCR_MODEL", self.openai_model)
 
 

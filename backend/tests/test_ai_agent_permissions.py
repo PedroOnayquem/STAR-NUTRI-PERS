@@ -34,6 +34,12 @@ class FakeAi:
         }
 
 
+class FailingAi(FakeAi):
+    async def complete_with_tools(self, **kwargs):
+        self.calls += 1
+        raise RuntimeError("provider rejected request")
+
+
 class FakeWorkspace:
     def __init__(self, role="nutritionist"):
         user_id = NUTRITIONIST_USER_ID if role == "nutritionist" else PATIENT_USER_ID
@@ -113,6 +119,17 @@ class FakeWorkspace:
         self._assert_scope(kwargs["nutritionist_id"], kwargs["patient_id"])
         self.mutations.append("create_training_plan")
         return {"id": "plan-1", **kwargs}
+
+    async def create_ai_training_plan(self, **kwargs):
+        self._assert_scope(kwargs["nutritionist_id"], kwargs["patient_id"])
+        self.mutations.append("create_training_plan")
+        exercise_count = sum(len(day.get("exercises") or []) for day in kwargs["days"])
+        return {
+            "training_plan_id": "plan-1",
+            "workout_id": "workout-1",
+            "days_count": len(kwargs["days"]),
+            "exercises_count": exercise_count,
+        }
 
     async def create_training_day_records(self, training_plan_id, days):
         return [{"id": "day-1", "order_index": index} for index, _ in enumerate(days)]
@@ -229,6 +246,42 @@ class AiAgentPermissionTests(unittest.IsolatedAsyncioTestCase):
         result = await self.execute(AiAgentService(workspace, FakeAi()), "update_diet_plan", {"diet_id": "diet-1", "calories": 1900})
         self.assertTrue(result["success"])
         self.assertIn("update_diet", workspace.mutations)
+
+    async def test_training_tool_orchestration_failure_is_audited(self):
+        workspace = FakeWorkspace()
+        actions = await AiAgentService(workspace, FailingAi()).run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=nutritionist_context(),
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="Crie e cadastre um treino para este paciente",
+            user_message_record=self.message,
+        )
+
+        self.assertEqual(actions[0]["tool"], "tool_orchestration")
+        self.assertEqual(actions[0]["status"], "failed")
+        self.assertFalse(actions[0]["success"])
+        self.assertEqual(workspace.mutations, [])
+
+    async def test_training_without_tool_call_is_audited(self):
+        workspace = FakeWorkspace()
+        actions = await AiAgentService(workspace, FakeAi()).run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=nutritionist_context(),
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="Crie e cadastre um treino para este paciente",
+            user_message_record=self.message,
+        )
+
+        self.assertEqual(actions[0]["tool"], "tool_orchestration")
+        self.assertEqual(actions[0]["status"], "failed")
+        self.assertFalse(actions[0]["success"])
+        self.assertEqual(workspace.mutations, [])
 
     async def test_06_authorized_patient_scope_is_used(self):
         workspace = FakeWorkspace()

@@ -60,6 +60,40 @@ class WorkspacePersistenceConfirmationTests(unittest.IsolatedAsyncioTestCase):
         row = await SupabaseWorkspaceService._get_row_by_id(service, "diets", "row-1")
         self.assertEqual(row["title"], "ok")
 
+    async def test_ai_training_plan_uses_atomic_rpc(self):
+        calls = []
+
+        async def request(method, path, **kwargs):
+            calls.append((method, path, kwargs.get("json")))
+            return {
+                "training_plan_id": "plan-1",
+                "workout_id": "workout-1",
+                "days_count": 1,
+                "exercises_count": 1,
+            }
+
+        self.service._request = request
+        result = await self.service.create_ai_training_plan(
+            nutritionist_id="nutritionist-1",
+            patient_id="patient-1",
+            title="Treino seguro",
+            objective="Condicionamento",
+            restrictions=[],
+            observations=None,
+            days=[
+                {
+                    "name": "Treino A",
+                    "exercises": [
+                        {"exercise_name": "Caminhada", "sets": 3, "reps": "10 min"}
+                    ],
+                }
+            ],
+        )
+
+        self.assertEqual(result["training_plan_id"], "plan-1")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0:2], ("POST", "/rest/v1/rpc/create_ai_training_plan"))
+
 
 if __name__ == "__main__":
     unittest.main()

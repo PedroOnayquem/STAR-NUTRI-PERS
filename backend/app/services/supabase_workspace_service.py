@@ -1788,6 +1788,37 @@ class SupabaseWorkspaceService:
         )
         return await self._get_row_by_id("training_plans", rows[0]["id"])
 
+    async def create_ai_training_plan(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        title: str,
+        objective: str | None,
+        restrictions: list[str],
+        observations: str | None,
+        days: list[dict],
+    ) -> dict:
+        result = await self._request(
+            "POST",
+            "/rest/v1/rpc/create_ai_training_plan",
+            json={
+                "p_nutritionist_id": nutritionist_id,
+                "p_patient_id": patient_id,
+                "p_title": title,
+                "p_objective": objective,
+                "p_restrictions": restrictions,
+                "p_observations": observations,
+                "p_days": days,
+            },
+        )
+        if not isinstance(result, dict):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="O banco retornou uma confirmacao invalida ao salvar o treino.",
+            )
+        return result
+
     async def create_training_day_records(
         self,
         *,

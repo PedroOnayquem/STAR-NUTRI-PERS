@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from datetime import UTC, datetime, timedelta, timezone
@@ -11,6 +12,8 @@ from ..core.config import settings
 from .openai_service import OpenAIChatService
 from .supabase_workspace_service import SupabaseWorkspaceService
 
+
+logger = logging.getLogger(__name__)
 
 PATIENT_READ_TOOLS = {
     "get_patient_conditions",
@@ -315,9 +318,38 @@ class AiAgentService:
                 reasoning_level=reasoning_level,
                 tools=tools,
                 user_message=user_message,
+                forced_tool="create_training_plan" if intent == "create_training_plan" else None,
+                max_completion_tokens=2400 if intent == "create_training_plan" else None,
             )
         except Exception:
-            decision = {}
+            logger.exception(
+                "AI tool orchestration failed: intent=%s chat_scope=%s chat_id=%s patient_id=%s",
+                intent,
+                chat_scope,
+                chat.get("id"),
+                self._patient_id(context) or None,
+            )
+            return [
+                await self._record_action(
+                    actor=profile,
+                    arguments={"requested_intent": intent},
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    error="O provedor de IA nao conseguiu preparar a acao solicitada.",
+                    intent=intent,
+                    message=user_message_record,
+                    result={
+                        "label": "Acao nao concluida",
+                        "summary": (
+                            "O servico de IA nao conseguiu estruturar a acao. "
+                            "Nenhuma alteracao foi salva."
+                        ),
+                    },
+                    status="failed",
+                    tool_name="tool_orchestration",
+                )
+            ]
 
         actions: list[dict] = []
         for tool_call in decision.get("tool_calls") or []:
@@ -373,6 +405,36 @@ class AiAgentService:
                     intent=intent,
                     message=user_message_record,
                     tool_name=tool_name,
+                )
+            )
+
+        if intent == "create_training_plan" and not actions:
+            logger.error(
+                "AI tool orchestration returned no call: intent=%s chat_scope=%s chat_id=%s patient_id=%s",
+                intent,
+                chat_scope,
+                chat.get("id"),
+                self._patient_id(context) or None,
+            )
+            actions.append(
+                await self._record_action(
+                    actor=profile,
+                    arguments={"requested_intent": intent},
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    error="A IA nao retornou a estrutura necessaria para criar o treino.",
+                    intent=intent,
+                    message=user_message_record,
+                    result={
+                        "label": "Treino nao estruturado",
+                        "summary": (
+                            "Nao foi possivel estruturar dias e exercicios. "
+                            "Nenhuma alteracao foi salva."
+                        ),
+                    },
+                    status="failed",
+                    tool_name="tool_orchestration",
                 )
             )
 
@@ -770,6 +832,14 @@ class AiAgentService:
                 )
         except Exception as exc:
             friendly_error = _friendly_tool_error(exc)
+            logger.exception(
+                "AI tool execution failed: tool=%s intent=%s chat_scope=%s chat_id=%s patient_id=%s",
+                tool_name,
+                intent,
+                chat_scope,
+                chat.get("id"),
+                self._patient_id(context) or None,
+            )
             if settings.app_env == "development":
                 print("Erro técnico em tool:", tool_name, repr(exc))
             return await self._record_action(
@@ -2812,56 +2882,14 @@ class AiAgentService:
                 tool_name="create_training_plan",
             )
 
-        plan = await self.workspace.create_training_plan_record(
+        persisted = await self.workspace.create_ai_training_plan(
             nutritionist_id=nutritionist["id"],
             patient_id=patient["id"],
             title=payload["title"],
             objective=payload["objective"],
             restrictions=payload["restrictions"],
             observations=payload["observations"],
-            status="active",
-        )
-        days = await self.workspace.create_training_day_records(
-            training_plan_id=plan["id"],
             days=payload["days"],
-        )
-        day_by_order = {day["order_index"]: day for day in days}
-        training_exercises_payload: list[dict] = []
-        mirror_exercises_payload: list[dict] = []
-        for day_index, day in enumerate(payload["days"]):
-            created_day = day_by_order.get(day_index)
-            if not created_day:
-                continue
-            for exercise_index, exercise in enumerate(day["exercises"]):
-                training_exercises_payload.append(
-                    {
-                        "training_day_id": created_day["id"],
-                        "muscle_group": exercise.get("muscle_group"),
-                        "exercise_name": exercise["exercise_name"],
-                        "sets": exercise["sets"],
-                        "reps": exercise["reps"],
-                        "rest": exercise.get("rest"),
-                        "load_guidance": exercise.get("load_guidance"),
-                        "notes": exercise.get("notes"),
-                        "order_index": exercise_index,
-                    }
-                )
-                mirror_exercises_payload.append(exercise)
-
-        exercises = await self.workspace.create_training_exercise_records(
-            training_exercises_payload,
-        )
-        workout = await self.workspace.create_workout_record(
-            nutritionist_id=nutritionist["id"],
-            patient_id=patient["id"],
-            title=payload["title"],
-            description=self._training_plan_description(payload),
-            frequency_per_week=len(payload["days"]),
-            is_active=True,
-        )
-        workout_exercises = await self.workspace.create_workout_exercise_records(
-            workout_id=workout["id"],
-            exercises=mirror_exercises_payload,
         )
 
         pending_observation = _optional_text(
@@ -2881,7 +2909,7 @@ class AiAgentService:
                     "pending_action": "add_workout_observation",
                     "target_entity": "training_plan",
                     "pending_payload": {
-                        "training_plan_id": plan["id"],
+                        "training_plan_id": persisted["training_plan_id"],
                         "observation": pending_observation,
                     },
                     "expires_at": (_sao_paulo_now() + timedelta(minutes=30)).isoformat(),
@@ -2891,24 +2919,18 @@ class AiAgentService:
         result = {
             "label": "Treino cadastrado",
             "summary": (
-                f"Plano {payload['title']} salvo com {len(days)} dia(s) "
-                f"e {len(exercises)} exercicio(s)."
+                f"Plano {payload['title']} salvo com {persisted['days_count']} dia(s) "
+                f"e {persisted['exercises_count']} exercicio(s)."
             ),
-            "training_plan_id": plan["id"],
-            "workout_id": workout["id"],
-            "days_count": len(days),
-            "exercises_count": len(exercises),
+            "training_plan_id": persisted["training_plan_id"],
+            "workout_id": persisted["workout_id"],
+            "days_count": persisted["days_count"],
+            "exercises_count": persisted["exercises_count"],
             "pending_observation": pending_observation,
         }
         return await self._record_action(
             actor=actor,
-            after_state={
-                "training_plan": plan,
-                "training_days": days,
-                "training_exercises": exercises,
-                "workout": workout,
-                "workout_exercises": workout_exercises,
-            },
+            after_state=persisted,
             arguments=payload,
             chat=chat,
             chat_scope=chat_scope,

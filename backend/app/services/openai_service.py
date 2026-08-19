@@ -54,9 +54,12 @@ class OpenAIChatService:
                 {"role": "user", "content": user_message},
             ],
             "stream": True,
-            "temperature": generation["temperature"],
             "max_completion_tokens": generation["max_tokens"],
         }
+        if _uses_gpt_5_6(self.model):
+            payload["reasoning_effort"] = "none"
+        elif _supports_custom_temperature(self.model):
+            payload["temperature"] = generation["temperature"]
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -111,6 +114,8 @@ class OpenAIChatService:
         reasoning_level: str,
         tools: list[dict],
         user_message: str,
+        forced_tool: str | None = None,
+        max_completion_tokens: int | None = None,
     ) -> dict:
         generation = GENERATION_SETTINGS.get(
             reasoning_level,
@@ -124,10 +129,21 @@ class OpenAIChatService:
                 {"role": "user", "content": user_message},
             ],
             "tools": tools,
-            "tool_choice": "auto",
-            "temperature": 0,
-            "max_completion_tokens": min(generation["max_tokens"], 900),
+            "tool_choice": (
+                {"type": "function", "function": {"name": forced_tool}}
+                if forced_tool
+                else "auto"
+            ),
+            "max_completion_tokens": (
+                max_completion_tokens
+                if max_completion_tokens is not None
+                else min(generation["max_tokens"], 900)
+            ),
         }
+        if _uses_gpt_5_6(self.model):
+            payload["reasoning_effort"] = "none"
+        elif _supports_custom_temperature(self.model):
+            payload["temperature"] = 0
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -181,9 +197,12 @@ class OpenAIChatService:
                     "content": json.dumps(user_payload, ensure_ascii=False, default=str),
                 },
             ],
-            "temperature": 0,
             "max_completion_tokens": min(generation["max_tokens"], max_tokens),
         }
+        if _uses_gpt_5_6(self.model):
+            payload["reasoning_effort"] = "none"
+        elif _supports_custom_temperature(self.model):
+            payload["temperature"] = 0
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -214,18 +233,32 @@ class OpenAIChatService:
         return _parse_json_object(content)
 
     def _raise_provider_error(self, response: httpx.Response) -> None:
+        try:
+            provider_error = response.json().get("error") or {}
+        except ValueError:
+            provider_error = {}
         logger.warning(
-            "OpenAI request rejected",
-            extra={
-                "provider_status": response.status_code,
-                "provider_request_id": response.headers.get("x-request-id"),
-                "model": self.model,
-            },
+            "OpenAI request rejected: status=%s type=%s code=%s param=%s model=%s request_id=%s",
+            response.status_code,
+            provider_error.get("type"),
+            provider_error.get("code"),
+            provider_error.get("param"),
+            self.model,
+            response.headers.get("x-request-id"),
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="O provedor de IA nao conseguiu processar a solicitacao.",
         )
+
+
+def _supports_custom_temperature(model: str) -> bool:
+    normalized = model.lower()
+    return not normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _uses_gpt_5_6(model: str) -> bool:
+    return model.lower().startswith("gpt-5.6")
 
 
 def _parse_json_object(content: str) -> dict:
