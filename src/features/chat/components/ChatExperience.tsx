@@ -226,7 +226,7 @@ export function ChatExperience({
   return (
     <div
       className={cn(
-        'h-[calc(100vh-8rem)] min-h-[680px] overflow-hidden rounded-[28px] border border-[var(--chat-border)] bg-[radial-gradient(circle_at_18%_0%,rgba(34,211,238,0.14),transparent_28%),radial-gradient(circle_at_86%_12%,rgba(16,185,129,0.12),transparent_24%),linear-gradient(145deg,#060818_0%,#0b1020_48%,#0f172a_100%)] text-slate-100 shadow-[0_28px_90px_rgba(2,6,23,0.36),0_0_70px_var(--chat-glow)]',
+        'chat-shell h-[calc(100vh-8rem)] min-h-[680px] overflow-hidden rounded-[28px] border border-[var(--chat-border)]',
         className,
       )}
     >
@@ -251,7 +251,7 @@ export function ChatExperience({
           sessions={filteredSessions}
         />
 
-        <section className="flex min-h-0 flex-col bg-[linear-gradient(180deg,rgba(15,23,42,0.42),rgba(2,6,23,0.18))]">
+        <section className="chat-content flex min-h-0 flex-col">
           <ChatTopbar
             currentTitle={currentTitle}
             onPatientChange={onPatientChange}
@@ -374,10 +374,10 @@ function ChatSidebar({
   sessions: ChatSessionRecord[]
 }) {
   return (
-    <aside className="flex max-h-72 min-h-0 flex-col border-b border-[var(--chat-border)] bg-[rgba(2,6,23,0.30)] backdrop-blur-xl lg:max-h-none lg:border-b-0 lg:border-r">
+    <aside className="chat-sidebar flex max-h-72 min-h-0 flex-col border-b border-[var(--chat-border)] backdrop-blur-xl lg:max-h-none lg:border-b-0 lg:border-r">
       <div className="space-y-3 p-3">
         <Button
-          className="h-10 w-full justify-start rounded-2xl border border-cyan-300/15 bg-slate-900/70 text-slate-100 shadow-[0_12px_34px_rgba(2,6,23,0.20)] hover:border-cyan-300/25 hover:bg-slate-800/80 hover:text-white hover:shadow-[0_16px_42px_rgba(56,189,248,0.12)]"
+          className="chat-control h-10 w-full justify-start rounded-2xl border border-[var(--chat-border)] shadow-sm hover:border-[var(--chat-border-strong)] hover:text-[var(--chat-text)]"
           disabled={!canCreate || creating}
           onClick={onCreateSession}
           type="button"
@@ -391,10 +391,10 @@ function ChatSidebar({
           {createLabel}
         </Button>
 
-        <label className="flex h-10 items-center gap-2 rounded-2xl border border-cyan-300/10 bg-slate-950/35 px-3 text-slate-400 shadow-inner shadow-cyan-950/10 transition focus-within:border-cyan-300/35 focus-within:bg-slate-950/55 focus-within:text-cyan-100 focus-within:ring-2 focus-within:ring-cyan-400/10">
+        <label className="chat-control chat-muted flex h-10 items-center gap-2 rounded-2xl border border-[var(--chat-border)] px-3 shadow-inner transition focus-within:border-[var(--chat-border-strong)] focus-within:text-[var(--chat-accent-text)] focus-within:ring-2 focus-within:ring-cyan-400/10">
           <Search size={16} />
           <input
-            className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
+            className="chat-text min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--chat-subtle)]"
             onChange={(event) => onSearch(event.target.value)}
             placeholder="Buscar conversas"
             value={search}
@@ -410,7 +410,7 @@ function ChatSidebar({
             <Skeleton className="h-16 rounded-2xl" />
           </div>
         ) : sessions.length === 0 ? (
-          <div className="mx-1 rounded-2xl border border-dashed border-cyan-300/15 bg-slate-950/20 p-4 text-sm text-slate-400">
+          <div className="chat-muted mx-1 rounded-2xl border border-dashed border-[var(--chat-border)] bg-[var(--chat-surface)] p-4 text-sm">
             Nenhuma conversa encontrada.
           </div>
         ) : (
@@ -420,8 +420,8 @@ function ChatSidebar({
                 className={cn(
                   'group w-full rounded-2xl px-3 py-3 text-left transition',
                   currentSessionId === session.id
-                    ? 'bg-cyan-300/10 text-white shadow-[inset_0_0_0_1px_rgba(34,211,238,0.14),0_12px_36px_rgba(8,47,73,0.16)]'
-                    : 'text-slate-400 hover:bg-cyan-300/[0.07] hover:text-slate-100',
+                    ? 'bg-[var(--chat-active-background)] text-[var(--chat-text)] shadow-[inset_0_0_0_1px_var(--chat-border-strong),0_12px_36px_var(--chat-glow)]'
+                    : 'text-[var(--chat-muted)] hover:bg-[var(--chat-active-background)] hover:text-[var(--chat-text)]',
                 )}
                 key={session.id}
                 onClick={() => onSelectSession(session.id)}
@@ -430,7 +430,7 @@ function ChatSidebar({
                 <span className="block truncate text-sm font-bold">
                   {session.title || 'Nova conversa'}
                 </span>
-                <span className="mt-1 block truncate text-xs text-slate-500 group-hover:text-slate-400">
+                <span className="chat-subtle mt-1 block truncate text-xs group-hover:text-[var(--chat-muted)]">
                   {patientLabelBySessionId[session.id] ?? GENERAL_CHAT_OPTION.name} -{' '}
                   {formatSessionDate(session)}
                 </span>
@@ -461,13 +461,13 @@ function ChatTopbar({
   const [patientMenuOpen, setPatientMenuOpen] = useState(false)
 
   return (
-    <header className="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-[var(--chat-border)] bg-[rgba(6,8,24,0.64)] px-4 py-2.5 shadow-[0_1px_0_rgba(56,189,248,0.05)] backdrop-blur-xl sm:px-5">
+    <header className="chat-chrome flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-[var(--chat-border)] px-4 py-2.5 shadow-sm backdrop-blur-xl sm:px-5">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold text-slate-50">
+          <h2 className="chat-text truncate text-sm font-semibold">
             {currentTitle}
           </h2>
-          <p className="truncate text-xs text-slate-400">
+          <p className="chat-muted truncate text-xs">
             {scope === 'nutritionist' ? 'Chat do nutricionista' : 'Chat do paciente'}
           </p>
         </div>
@@ -598,12 +598,12 @@ function PatientFocusMenu({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label="Paciente em foco"
-        className="group inline-flex h-9 w-full min-w-0 max-w-[min(64vw,20rem)] items-center gap-2 rounded-full border border-cyan-300/10 bg-slate-950/35 px-3 text-left text-slate-100 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition hover:border-cyan-300/25 hover:bg-cyan-300/[0.08] hover:text-white hover:shadow-[0_0_24px_rgba(56,189,248,0.10)] sm:w-auto sm:max-w-80"
+        className="chat-control group inline-flex h-9 w-full min-w-0 max-w-[min(64vw,20rem)] items-center gap-2 rounded-full border border-[var(--chat-border)] px-3 text-left shadow-sm transition hover:border-[var(--chat-border-strong)] hover:text-[var(--chat-text)] hover:shadow-[0_0_24px_var(--chat-glow)] sm:w-auto sm:max-w-80"
         onClick={() => setOpen(!open)}
         onKeyDown={handleTriggerKeyDown}
         type="button"
       >
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan-300/12 text-[10px] font-black text-cyan-100">
+        <span className="chat-accent-text flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cyan-400/10 text-[10px] font-black">
           {selectedPatient?.isGeneral ? 'IA' : getInitials(selectedPatient?.name ?? 'P')}
         </span>
         <span className="block min-w-0 flex-1 truncate text-sm font-medium">
@@ -611,7 +611,7 @@ function PatientFocusMenu({
         </span>
         <ChevronDown
           className={cn(
-            'shrink-0 text-cyan-200/70 transition group-hover:text-cyan-100',
+            'chat-accent-text shrink-0 opacity-70 transition group-hover:opacity-100',
             open && 'rotate-180',
           )}
           size={15}
@@ -624,7 +624,7 @@ function PatientFocusMenu({
             <>
               <motion.div
                 animate={{ opacity: 1 }}
-                className="fixed inset-0 z-40 bg-[#020617]/35 backdrop-blur-[3px]"
+                className="fixed inset-0 z-40 bg-[var(--chat-menu-overlay)] backdrop-blur-[3px]"
                 exit={{ opacity: 0 }}
                 initial={{ opacity: 0 }}
                 onClick={() => setOpen(false)}
@@ -634,7 +634,7 @@ function PatientFocusMenu({
                 aria-label="Selecionar paciente"
                 aria-modal={isMobile}
                 className={cn(
-                  'fixed z-50 flex overflow-hidden border border-cyan-300/15 bg-[rgba(11,16,32,0.94)] text-slate-100 shadow-[0_24px_80px_rgba(2,6,23,0.56),0_0_70px_rgba(56,189,248,0.16)] backdrop-blur-2xl',
+                  'chat-menu fixed z-50 flex overflow-hidden border border-[var(--chat-border)] backdrop-blur-2xl',
                   isMobile
                     ? 'inset-x-3 bottom-3 max-h-[78vh] flex-col rounded-[24px]'
                     : 'max-h-[520px] flex-col rounded-2xl',
@@ -645,12 +645,12 @@ function PatientFocusMenu({
                 style={menuStyle}
                 transition={{ duration: 0.18, ease: 'easeOut' }}
               >
-                <div className="border-b border-cyan-300/10 p-3">
-                  <label className="flex h-11 items-center gap-2 rounded-xl bg-slate-950/40 px-3 text-slate-300 ring-1 ring-cyan-300/12 transition focus-within:bg-slate-950/65 focus-within:ring-cyan-300/30 focus-within:shadow-[0_0_28px_rgba(56,189,248,0.10)]">
+                <div className="border-b border-[var(--chat-border)] p-3">
+                  <label className="chat-control chat-muted flex h-11 items-center gap-2 rounded-xl px-3 ring-1 ring-[var(--chat-border)] transition focus-within:ring-[var(--chat-border-strong)] focus-within:shadow-[0_0_28px_var(--chat-glow)]">
                     <Search size={16} />
                     <input
                       ref={searchRef}
-                      className="min-w-0 flex-1 bg-transparent text-[15px] font-normal text-white outline-none placeholder:text-slate-500"
+                      className="chat-text min-w-0 flex-1 bg-transparent text-[15px] font-normal outline-none placeholder:text-[var(--chat-subtle)]"
                       onChange={(event) => {
                         setSearch(event.target.value)
                         setActiveIndex(0)
@@ -659,13 +659,13 @@ function PatientFocusMenu({
                       placeholder="Buscar paciente..."
                       value={search}
                     />
-                    {pending && <Loader2 className="animate-spin text-slate-400" size={16} />}
+                    {pending && <Loader2 className="chat-muted animate-spin" size={16} />}
                   </label>
                 </div>
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2 [scrollbar-color:rgba(56,189,248,0.35)_transparent] [scrollbar-width:thin]">
                   {filteredPatients.length === 0 ? (
-                    <p className="px-3 py-8 text-center text-sm text-slate-400">
+                    <p className="chat-muted px-3 py-8 text-center text-sm">
                       Nenhum paciente encontrado.
                     </p>
                   ) : (
@@ -677,32 +677,32 @@ function PatientFocusMenu({
                           className={cn(
                             'flex h-11 w-full items-center gap-2 rounded-xl px-3 text-left text-sm transition duration-150',
                             selected
-                              ? 'bg-cyan-300/[0.12] text-white shadow-[inset_0_0_0_1px_rgba(34,211,238,0.14)]'
+                              ? 'bg-[var(--chat-active-background)] text-[var(--chat-text)] shadow-[inset_0_0_0_1px_var(--chat-border-strong)]'
                               : active
-                                ? 'bg-cyan-300/[0.08] text-white'
-                                : 'text-slate-300 hover:bg-cyan-300/[0.07] hover:text-white',
+                                ? 'bg-[var(--chat-active-background)] text-[var(--chat-text)]'
+                                : 'text-[var(--chat-muted)] hover:bg-[var(--chat-active-background)] hover:text-[var(--chat-text)]',
                           )}
                           key={patient.id ?? 'general'}
                           onClick={() => selectPatient(patient.id)}
                           onMouseEnter={() => setActiveIndex(index)}
                           type="button"
                         >
-                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-300/10 text-[10px] font-black text-cyan-100">
+                          <span className="chat-accent-text flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-400/10 text-[10px] font-black">
                             {patient.isGeneral ? 'IA' : getInitials(patient.name)}
                           </span>
                           <span className="min-w-0 flex-1 truncate font-medium">
                             {patient.name}
                           </span>
-                          {selected && <Check className="text-cyan-200" size={16} />}
+                          {selected && <Check className="chat-accent-text" size={16} />}
                         </button>
                       )
                     })
                   )}
                 </div>
 
-                <div className="border-t border-cyan-300/10 p-2">
+                <div className="border-t border-[var(--chat-border)] p-2">
                   <Link
-                    className="block rounded-xl px-3 py-3 text-sm font-medium text-slate-300 transition hover:bg-cyan-300/[0.08] hover:text-white"
+                    className="chat-muted block rounded-xl px-3 py-3 text-sm font-medium transition hover:bg-[var(--chat-active-background)] hover:text-[var(--chat-text)]"
                     onClick={() => setOpen(false)}
                     to={fullListPath}
                   >
@@ -721,7 +721,7 @@ function PatientFocusMenu({
 
 function StaticPatientPill({ patientName }: { patientName: string }) {
   return (
-    <div className="inline-flex h-9 min-w-0 max-w-[min(64vw,20rem)] items-center gap-2 truncate rounded-full border border-cyan-300/10 bg-slate-950/35 px-3 text-sm font-medium text-slate-100 sm:max-w-72">
+    <div className="chat-control inline-flex h-9 min-w-0 max-w-[min(64vw,20rem)] items-center gap-2 truncate rounded-full border border-[var(--chat-border)] px-3 text-sm font-medium sm:max-w-72">
       <span className="block min-w-0 truncate">{patientName}</span>
     </div>
   )
@@ -754,7 +754,7 @@ function ChatComposer({
 }) {
   return (
     <form
-      className="border-t border-[var(--chat-border)] bg-[rgba(6,8,24,0.70)] px-3 py-3 shadow-[0_-20px_60px_rgba(2,6,23,0.28)] backdrop-blur-xl sm:px-8 sm:py-4"
+      className="chat-chrome border-t border-[var(--chat-border)] px-3 py-3 shadow-[0_-12px_40px_var(--chat-glow)] backdrop-blur-xl sm:px-8 sm:py-4"
       onSubmit={onSubmit}
     >
       <div className="mx-auto max-w-3xl">
@@ -771,11 +771,11 @@ function ChatComposer({
           )}
         </AnimatePresence>
 
-        <div className="rounded-[26px] border border-cyan-300/14 bg-[rgba(15,23,42,0.76)] p-2 shadow-[0_18px_60px_rgba(2,6,23,0.34),0_0_42px_rgba(56,189,248,0.08)] backdrop-blur-xl transition duration-200 focus-within:border-cyan-300/35 focus-within:bg-[rgba(15,23,42,0.88)] focus-within:shadow-[0_22px_70px_rgba(2,6,23,0.42),0_0_54px_rgba(56,189,248,0.15)]">
+        <div className="chat-control rounded-[26px] border border-[var(--chat-border)] p-2 shadow-[var(--chat-panel-shadow)] backdrop-blur-xl transition duration-200 focus-within:border-[var(--chat-border-strong)]">
           <Textarea
             ref={textareaRef}
             aria-label="Mensagem para a IA"
-            className="max-h-40 min-h-10 resize-none border-0 bg-transparent px-3 py-2.5 text-[15px] leading-6 text-slate-100 shadow-none placeholder:text-slate-500 focus:ring-0 dark:bg-transparent"
+            className="chat-text max-h-40 min-h-10 resize-none border-0 bg-transparent px-3 py-2.5 text-[15px] leading-6 shadow-none placeholder:text-[var(--chat-subtle)] focus:ring-0 dark:bg-transparent"
             disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={(event) => {
@@ -798,7 +798,7 @@ function ChatComposer({
             )}
             <button
               aria-label="Microfone"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-slate-400 transition hover:bg-cyan-300/[0.09] hover:text-cyan-100 hover:shadow-[0_0_22px_rgba(56,189,248,0.12)] disabled:opacity-40"
+              className="chat-muted flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-[var(--chat-active-background)] hover:text-[var(--chat-accent-text)] hover:shadow-[0_0_22px_var(--chat-glow)] disabled:opacity-40"
               disabled={disabled}
               title="Microfone"
               type="button"
@@ -840,7 +840,7 @@ function ReasoningMenu({
       <button
         aria-expanded={open}
         aria-label="Nível de raciocínio da IA"
-        className="group inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-slate-400 transition hover:bg-cyan-300/[0.09] hover:text-cyan-100 hover:shadow-[0_0_22px_rgba(56,189,248,0.12)]"
+        className="chat-muted group inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm font-medium transition hover:bg-[var(--chat-active-background)] hover:text-[var(--chat-accent-text)] hover:shadow-[0_0_22px_var(--chat-glow)]"
         onClick={() => setOpen(!open)}
         type="button"
         title="Raciocínio"
@@ -863,14 +863,14 @@ function ReasoningMenu({
           <>
             <motion.div
               animate={{ opacity: 1 }}
-              className="fixed inset-0 z-20 bg-[#020617]/20 backdrop-blur-[1px]"
+              className="fixed inset-0 z-20 bg-[var(--chat-menu-overlay)] backdrop-blur-[1px]"
               exit={{ opacity: 0 }}
               initial={{ opacity: 0 }}
               onClick={() => setOpen(false)}
             />
             <motion.div
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              className="absolute bottom-full right-0 z-30 mb-2 w-[min(calc(100vw-2rem),300px)] overflow-hidden rounded-2xl border border-cyan-300/15 bg-[rgba(11,16,32,0.94)] p-1.5 text-slate-100 shadow-[0_24px_70px_rgba(2,6,23,0.50),0_0_54px_rgba(56,189,248,0.14)] backdrop-blur-xl"
+              className="chat-menu absolute bottom-full right-0 z-30 mb-2 w-[min(calc(100vw-2rem),300px)] overflow-hidden rounded-2xl border border-[var(--chat-border)] p-1.5 backdrop-blur-xl"
               exit={{ opacity: 0, scale: 0.98, y: 6 }}
               initial={{ opacity: 0, scale: 0.98, y: 6 }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
@@ -882,8 +882,8 @@ function ReasoningMenu({
                     className={cn(
                       'flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition',
                       active
-                        ? 'bg-cyan-300/[0.12] text-white shadow-[inset_0_0_0_1px_rgba(34,211,238,0.14)]'
-                        : 'text-slate-300 hover:bg-cyan-300/[0.07] hover:text-white',
+                        ? 'bg-[var(--chat-active-background)] text-[var(--chat-text)] shadow-[inset_0_0_0_1px_var(--chat-border-strong)]'
+                        : 'text-[var(--chat-muted)] hover:bg-[var(--chat-active-background)] hover:text-[var(--chat-text)]',
                     )}
                     key={level.id}
                     onClick={() => {
@@ -896,7 +896,7 @@ function ReasoningMenu({
                     <span className="min-w-0 flex-1 truncate font-medium">
                       {level.shortLabel}
                     </span>
-                    {active && <Check className="text-cyan-200" size={16} />}
+                    {active && <Check className="chat-accent-text" size={16} />}
                   </button>
                 )
               })}
@@ -1019,7 +1019,7 @@ const MessageBubble = memo(function MessageBubble({
           'max-w-[88%] text-sm leading-7 sm:max-w-[78%]',
           own
             ? 'rounded-[22px] bg-cyan-100 px-4 py-2.5 text-slate-950 shadow-[0_10px_34px_rgba(56,189,248,0.16)]'
-            : 'min-w-0 flex-1 text-slate-100',
+            : 'chat-text min-w-0 flex-1',
         )}
       >
         <MarkdownContent content={message.content} />
@@ -1090,7 +1090,7 @@ function actionTone(status: AgentAction['status']) {
 
 function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="max-w-none text-sm leading-7 [&_a]:font-semibold [&_a]:text-cyan-300 [&_blockquote]:border-l-2 [&_blockquote]:border-cyan-300/25 [&_blockquote]:pl-4 [&_code]:rounded-md [&_code]:bg-cyan-300/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-black [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-lg [&_h2]:font-black [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-cyan-300/10 [&_pre]:bg-slate-950/75 [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-4 [&_table]:w-full [&_table]:overflow-hidden [&_table]:rounded-2xl [&_table]:text-left [&_td]:border-t [&_td]:border-cyan-300/10 [&_td]:px-3 [&_td]:py-2 [&_th]:bg-cyan-300/10 [&_th]:px-3 [&_th]:py-2 [&_th]:font-bold [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5">
+    <div className="max-w-none text-sm leading-7 [&_a]:font-semibold [&_a]:text-cyan-600 dark:[&_a]:text-cyan-300 [&_blockquote]:border-l-2 [&_blockquote]:border-cyan-500/25 [&_blockquote]:pl-4 [&_code]:rounded-md [&_code]:bg-cyan-500/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_h1]:mb-3 [&_h1]:text-xl [&_h1]:font-black [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-lg [&_h2]:font-black [&_li]:my-1 [&_ol]:my-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-2xl [&_pre]:border [&_pre]:border-cyan-300/10 [&_pre]:bg-[var(--chat-pre-background)] [&_pre]:p-4 [&_pre]:text-slate-100 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:my-4 [&_table]:w-full [&_table]:overflow-hidden [&_table]:rounded-2xl [&_table]:text-left [&_td]:border-t [&_td]:border-cyan-500/15 [&_td]:px-3 [&_td]:py-2 [&_th]:bg-cyan-500/10 [&_th]:px-3 [&_th]:py-2 [&_th]:font-bold [&_ul]:my-3 [&_ul]:list-disc [&_ul]:pl-5">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   )
@@ -1131,10 +1131,10 @@ function ChatEmpty({
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-3xl bg-cyan-100 text-slate-950 shadow-[0_0_42px_rgba(56,189,248,0.24)]">
           <Bot size={20} />
         </div>
-        <h3 className="mt-4 text-lg font-black text-slate-50">
+        <h3 className="chat-text mt-4 text-lg font-black">
           {title}
         </h3>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-400">
+        <p className="chat-muted mx-auto mt-2 max-w-md text-sm leading-6">
           {description}
         </p>
       </div>

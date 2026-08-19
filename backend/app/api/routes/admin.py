@@ -31,3 +31,12 @@ async def create_nutritionist(
 async def get_admin_workspace(token: str = Depends(get_bearer_token)) -> dict:
     service = SupabaseWorkspaceService()
     return await service.get_admin_workspace(token)
+
+
+@router.get("/ai-guardrails/metrics")
+async def get_ai_guardrail_metrics(
+    days: int = 30,
+    token: str = Depends(get_bearer_token),
+) -> dict:
+    service = SupabaseWorkspaceService()
+    return await service.get_ai_guardrail_metrics(token, days=days)

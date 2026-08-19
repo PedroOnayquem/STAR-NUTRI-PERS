@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -9,6 +10,9 @@ from fastapi import HTTPException, status
 
 from ..core.config import settings
 
+logger = logging.getLogger(__name__)
+
+OPENAI_TIMEOUT = httpx.Timeout(90.0, connect=10.0, read=90.0, write=30.0)
 
 GENERATION_SETTINGS = {
     "low": {"max_tokens": 700, "temperature": 0.2},
@@ -60,7 +64,7 @@ class OpenAIChatService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT) as client:
                 async with client.stream(
                     "POST",
                     self.base_url,
@@ -68,11 +72,8 @@ class OpenAIChatService:
                     json=payload,
                 ) as response:
                     if response.status_code >= 400:
-                        body = await response.aread()
-                        raise HTTPException(
-                            status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail=f"OpenAI rejeitou a requisicao: {body.decode(errors='ignore')}",
-                        )
+                        await response.aread()
+                        self._raise_provider_error(response)
 
                     async for line in response.aiter_lines():
                         if not line or not line.startswith("data:"):
@@ -134,7 +135,7 @@ class OpenAIChatService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=45) as client:
+            async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT) as client:
                 response = await client.post(
                     self.base_url,
                     headers=headers,
@@ -147,13 +148,17 @@ class OpenAIChatService:
             ) from None
 
         if response.status_code >= 400:
+            self._raise_provider_error(response)
+
+        try:
+            body = response.json()
+        except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"OpenAI rejeitou a requisicao: {response.text}",
-            )
-
-        body = response.json()
-        return body.get("choices", [{}])[0].get("message", {})
+                detail="O provedor de IA retornou uma resposta invalida.",
+            ) from None
+        message = body.get("choices", [{}])[0].get("message", {})
+        return message if isinstance(message, dict) else {}
 
     async def complete_json(
         self,
@@ -186,7 +191,7 @@ class OpenAIChatService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=45) as client:
+            async with httpx.AsyncClient(timeout=OPENAI_TIMEOUT) as client:
                 response = await client.post(
                     self.base_url,
                     headers=headers,
@@ -199,18 +204,28 @@ class OpenAIChatService:
             ) from None
 
         if response.status_code >= 400:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"OpenAI rejeitou a requisicao: {response.text}",
-            )
+            self._raise_provider_error(response)
 
-        content = (
-            response.json()
-            .get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
+        try:
+            body = response.json()
+        except ValueError:
+            return {}
+        content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
         return _parse_json_object(content)
+
+    def _raise_provider_error(self, response: httpx.Response) -> None:
+        logger.warning(
+            "OpenAI request rejected",
+            extra={
+                "provider_status": response.status_code,
+                "provider_request_id": response.headers.get("x-request-id"),
+                "model": self.model,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="O provedor de IA nao conseguiu processar a solicitacao.",
+        )
 
 
 def _parse_json_object(content: str) -> dict:

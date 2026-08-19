@@ -543,6 +543,9 @@ Implementacao:
 
 ## 12. Fluxo Completo do Chat com IA ChatGPT
 
+> A camada implementada de validação de entrada, contexto, saída, auditoria e proteção contra prompt injection está detalhada em [AI_GUARDRAILS.md](AI_GUARDRAILS.md).
+> A execução real, o inventário de tools, as permissões e a confirmação estão detalhados em [AI_ACTION_TOOLS.md](AI_ACTION_TOOLS.md).
+
 Fluxo:
 
 1. Nutricionista ou paciente abre seu ambiente de chat.

@@ -6,14 +6,111 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
+  --chat-shell: #f8fafc;
+  --chat-panel: rgba(255, 255, 255, 0.86);
+  --chat-panel-strong: rgba(255, 255, 255, 0.96);
+  --chat-surface: rgba(248, 250, 252, 0.9);
+  --chat-border: rgba(15, 23, 42, 0.11);
+  --chat-border-strong: rgba(8, 145, 178, 0.28);
+  --chat-glow: rgba(14, 165, 233, 0.1);
+  --chat-glow-strong: rgba(16, 185, 129, 0.14);
+  --chat-text: #0f172a;
+  --chat-muted: #64748b;
+  --chat-subtle: #94a3b8;
+  --chat-accent-text: #0e7490;
+  --chat-shell-background:
+    radial-gradient(circle at 18% 0%, rgba(34, 211, 238, 0.1), transparent 28%),
+    radial-gradient(circle at 86% 12%, rgba(16, 185, 129, 0.09), transparent 24%),
+    linear-gradient(145deg, #ffffff 0%, #f8fafc 48%, #f1f5f9 100%);
+  --chat-content-background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(241, 245, 249, 0.36));
+  --chat-sidebar-background: rgba(248, 250, 252, 0.68);
+  --chat-chrome-background: rgba(255, 255, 255, 0.76);
+  --chat-control-background: rgba(255, 255, 255, 0.82);
+  --chat-control-background-hover: rgba(236, 254, 255, 0.9);
+  --chat-active-background: rgba(6, 182, 212, 0.1);
+  --chat-menu-overlay: rgba(15, 23, 42, 0.2);
+  --chat-pre-background: rgba(15, 23, 42, 0.94);
+  --chat-shell-shadow: 0 28px 80px rgba(15, 23, 42, 0.13), 0 0 60px var(--chat-glow);
+  --chat-panel-shadow: 0 18px 52px rgba(15, 23, 42, 0.12), 0 0 42px var(--chat-glow);
+}
+
+.dark {
   --chat-shell: #060818;
   --chat-panel: rgba(15, 23, 42, 0.78);
-  --chat-panel-strong: rgba(11, 16, 32, 0.92);
+  --chat-panel-strong: rgba(11, 16, 32, 0.94);
   --chat-surface: rgba(15, 23, 42, 0.64);
   --chat-border: rgba(96, 165, 250, 0.16);
   --chat-border-strong: rgba(34, 211, 238, 0.28);
   --chat-glow: rgba(56, 189, 248, 0.18);
   --chat-glow-strong: rgba(16, 185, 129, 0.22);
+  --chat-text: #f1f5f9;
+  --chat-muted: #94a3b8;
+  --chat-subtle: #64748b;
+  --chat-accent-text: #cffafe;
+  --chat-shell-background:
+    radial-gradient(circle at 18% 0%, rgba(34, 211, 238, 0.14), transparent 28%),
+    radial-gradient(circle at 86% 12%, rgba(16, 185, 129, 0.12), transparent 24%),
+    linear-gradient(145deg, #060818 0%, #0b1020 48%, #0f172a 100%);
+  --chat-content-background: linear-gradient(180deg, rgba(15, 23, 42, 0.42), rgba(2, 6, 23, 0.18));
+  --chat-sidebar-background: rgba(2, 6, 23, 0.3);
+  --chat-chrome-background: rgba(6, 8, 24, 0.7);
+  --chat-control-background: rgba(15, 23, 42, 0.76);
+  --chat-control-background-hover: rgba(15, 23, 42, 0.9);
+  --chat-active-background: rgba(34, 211, 238, 0.1);
+  --chat-menu-overlay: rgba(2, 6, 23, 0.35);
+  --chat-pre-background: rgba(2, 6, 23, 0.75);
+  --chat-shell-shadow: 0 28px 90px rgba(2, 6, 23, 0.36), 0 0 70px var(--chat-glow);
+  --chat-panel-shadow: 0 24px 70px rgba(2, 6, 23, 0.5), 0 0 54px var(--chat-glow);
+}
+
+.chat-shell {
+  background: var(--chat-shell-background);
+  box-shadow: var(--chat-shell-shadow);
+  color: var(--chat-text);
+}
+
+.chat-content {
+  background: var(--chat-content-background);
+}
+
+.chat-sidebar {
+  background: var(--chat-sidebar-background);
+}
+
+.chat-chrome {
+  background: var(--chat-chrome-background);
+}
+
+.chat-control {
+  background: var(--chat-control-background);
+  color: var(--chat-text);
+}
+
+.chat-control:hover,
+.chat-control:focus-within {
+  background: var(--chat-control-background-hover);
+}
+
+.chat-menu {
+  background: var(--chat-panel-strong);
+  box-shadow: var(--chat-panel-shadow);
+  color: var(--chat-text);
+}
+
+.chat-text {
+  color: var(--chat-text);
+}
+
+.chat-muted {
+  color: var(--chat-muted);
+}
+
+.chat-subtle {
+  color: var(--chat-subtle);
+}
+
+.chat-accent-text {
+  color: var(--chat-accent-text);
 }
 
 body {

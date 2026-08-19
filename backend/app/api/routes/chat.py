@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import unicodedata
 
@@ -8,13 +9,16 @@ from fastapi.responses import StreamingResponse
 from ...schemas.chat import CreateChatSessionRequest, SendChatMessageRequest
 from ...core.config import settings
 from ...services.ai_agent_service import AiAgentService
+from ...services.ai_guardrail_service import AiGuardrailService, GuardrailDecision
 from ...services.chat_context_service import ChatContextService
 from ...services.openai_service import OpenAIChatService
+from ...services.file_monitoring_service import FileMonitoringService
 from ...services.supabase_workspace_service import SupabaseWorkspaceService
 from .admin import get_bearer_token
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 legacy_router = APIRouter(tags=["chat-legacy"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/sessions")
@@ -22,9 +26,13 @@ async def list_chat_sessions(
     patient_id: str | None = None,
     token: str = Depends(get_bearer_token),
 ) -> list[dict]:
-    if patient_id:
+    workspace = SupabaseWorkspaceService()
+    profile = await workspace.get_authenticated_profile(token)
+    if profile["role"] == "nutritionist":
         return await list_nutritionist_chat_sessions(patient_id=patient_id, token=token)
-    return await list_patient_chat_sessions(token)
+    if profile["role"] == "patient":
+        return await list_patient_chat_sessions(token)
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Perfil sem acesso ao chat.")
 
 
 @router.get("/nutritionist/sessions")
@@ -57,9 +65,13 @@ async def create_chat_session(
     payload: CreateChatSessionRequest,
     token: str = Depends(get_bearer_token),
 ) -> dict:
-    if payload.patient_id:
+    workspace = SupabaseWorkspaceService()
+    profile = await workspace.get_authenticated_profile(token)
+    if profile["role"] == "nutritionist":
         return await create_nutritionist_chat_session(payload, token)
-    return await create_patient_chat_session(payload, token)
+    if profile["role"] == "patient":
+        return await create_patient_chat_session(payload, token)
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Perfil sem acesso ao chat.")
 
 
 @router.post("/nutritionist/sessions")
@@ -148,9 +160,13 @@ async def send_chat_message(
     payload: SendChatMessageRequest,
     token: str = Depends(get_bearer_token),
 ) -> StreamingResponse:
-    if payload.patient_id:
+    workspace = SupabaseWorkspaceService()
+    profile = await workspace.get_authenticated_profile(token)
+    if profile["role"] == "nutritionist":
         return await send_nutritionist_chat_message(payload, token)
-    return await send_patient_chat_message(payload, token)
+    if profile["role"] == "patient":
+        return await send_patient_chat_message(payload, token)
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Perfil sem acesso ao chat.")
 
 
 @router.post("/nutritionist/send")
@@ -294,6 +310,31 @@ async def _stream_chat_response(
     token: str,
     workspace: SupabaseWorkspaceService,
 ) -> StreamingResponse:
+    guardrails = AiGuardrailService()
+    actor = await workspace.get_authenticated_profile(token)
+    context_decision = guardrails.evaluate_context(
+        actor=actor,
+        chat_scope=chat_scope,
+        context=context,
+        chat=session,
+    )
+    if context_decision.blocked:
+        await _record_guardrail_event_safely(
+            workspace=workspace,
+            guardrails=guardrails,
+            actor=actor,
+            chat=session,
+            chat_scope=chat_scope,
+            context=context,
+            decision=context_decision,
+            stage="context",
+            content=None,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=context_decision.response or "Acesso ao contexto nao autorizado.",
+        )
+
     if settings.app_env == "development":
         print(
             "[chat] request",
@@ -323,6 +364,37 @@ async def _stream_chat_response(
         content=payload.content,
     )
 
+    input_decision = guardrails.evaluate_input(
+        payload.content,
+        actor=actor,
+        chat_scope=chat_scope,
+        context=context,
+    )
+    if input_decision.should_log:
+        await _record_guardrail_event_safely(
+            workspace=workspace,
+            guardrails=guardrails,
+            actor=actor,
+            chat=session,
+            chat_scope=chat_scope,
+            context=context,
+            decision=input_decision,
+            stage="input",
+            content=payload.content,
+            message_id=user_message["id"],
+        )
+
+    if input_decision.blocked:
+        return _guardrail_response(
+            chats_table=chats_table,
+            chat_scope=chat_scope,
+            decision=input_decision,
+            messages_table=messages_table,
+            session=session,
+            user_message=user_message,
+            workspace=workspace,
+        )
+
     reasoning_settings = context_service.get_reasoning_settings(payload.reasoning_level)
     if chat_scope == "nutritionist":
         session_messages = await workspace.list_authorized_nutritionist_messages(
@@ -341,6 +413,7 @@ async def _stream_chat_response(
         exclude_message_id=user_message["id"],
         limit=reasoning_settings["history_limit"],
     )
+    history = guardrails.sanitize_history(history)
     memory_context = await context_service.load_memory_context(
         chat=session,
         chat_scope=chat_scope,
@@ -357,9 +430,20 @@ async def _stream_chat_response(
                 "session_id": session.get("id"),
             },
         )
-        print(
-            "Contexto enviado para IA:",
-            json.dumps(_debug_context_payload(context), ensure_ascii=False, default=str),
+    try:
+        await FileMonitoringService().record_ai_context_usage(
+            token=token,
+            context=context,
+            chat_scope=chat_scope,
+            chat_id=session["id"],
+            message_id=user_message["id"],
+            metric_limit=reasoning_settings["metric_limit"],
+        )
+    except Exception:
+        # Telemetry must never prevent a clinical chat response.
+        logger.exception(
+            "Could not record imported-file AI context usage",
+            extra={"chat_scope": chat_scope, "chat_id": session.get("id")},
         )
     system_prompt = context_service.build_system_prompt(
         context,
@@ -399,7 +483,6 @@ async def _stream_chat_response(
 
             if deterministic_answer:
                 answer = deterministic_answer
-                yield _event("delta", {"content": deterministic_answer})
             else:
                 response_prompt = _with_agent_actions(system_prompt, agent_actions)
                 async for delta in ai_service.stream_chat(
@@ -409,7 +492,28 @@ async def _stream_chat_response(
                     user_message=payload.content,
                 ):
                     answer += delta
-                    yield _event("delta", {"content": delta})
+
+            output_validation = guardrails.validate_output(
+                answer,
+                actor=actor,
+                context=context,
+                agent_actions=agent_actions,
+            )
+            if not output_validation.allowed:
+                await _record_guardrail_event_safely(
+                    workspace=workspace,
+                    guardrails=guardrails,
+                    actor=actor,
+                    chat=session,
+                    chat_scope=chat_scope,
+                    context=context,
+                    stage="output",
+                    content=answer,
+                    message_id=user_message["id"],
+                    output_validation=output_validation,
+                )
+            answer = output_validation.content
+            yield _event("delta", {"content": answer})
 
             saved = await workspace.insert_chat_message(
                 messages_table=messages_table,
@@ -424,6 +528,8 @@ async def _stream_chat_response(
                     "scope": chat_scope,
                     "source": "openai",
                     "memory_context_loaded": memory_context.get("loaded_conversations", 0),
+                    "guardrail_input_category": input_decision.category,
+                    "guardrail_output_allowed": output_validation.allowed,
                 },
                 touch_chat=False,
             )
@@ -439,12 +545,117 @@ async def _stream_chat_response(
         except Exception as exc:
             if settings.app_env == "development":
                 print("Erro real no stream do chat:", repr(exc))
+            await _record_guardrail_event_safely(
+                workspace=workspace,
+                guardrails=guardrails,
+                actor=actor,
+                chat=session,
+                chat_scope=chat_scope,
+                context=context,
+                stage="provider",
+                content=None,
+                message_id=user_message["id"],
+                provider_error=True,
+            )
             yield _event(
                 "error",
                 {"detail": "Não foi possível concluir esta ação agora. Tente novamente em instantes."},
             )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _guardrail_response(
+    *,
+    chats_table: str,
+    chat_scope: str,
+    decision: GuardrailDecision,
+    messages_table: str,
+    session: dict,
+    user_message: dict,
+    workspace: SupabaseWorkspaceService,
+) -> StreamingResponse:
+    async def event_stream():
+        response = decision.response or "Não posso atender a essa solicitação."
+        yield _event("session", {"session_id": session["id"]})
+        saved = await workspace.insert_chat_message(
+            messages_table=messages_table,
+            chats_table=chats_table,
+            chat_id=session["id"],
+            sender="ai",
+            content=response,
+            metadata={
+                "source": "guardrail",
+                "scope": chat_scope,
+                "guardrail_category": decision.category,
+                "guardrail_action": decision.action,
+                "guardrail_rule_ids": list(decision.rule_ids),
+                "in_reply_to": user_message.get("id"),
+            },
+            touch_chat=False,
+        )
+        yield _event("delta", {"content": response})
+        yield _event("done", {"message": saved})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+async def _record_guardrail_event_safely(
+    *,
+    workspace: SupabaseWorkspaceService,
+    guardrails: AiGuardrailService,
+    actor: dict,
+    chat: dict,
+    chat_scope: str,
+    context: dict,
+    stage: str,
+    content: str | None,
+    message_id: str | None = None,
+    decision: GuardrailDecision | None = None,
+    output_validation=None,
+    provider_error: bool = False,
+) -> None:
+    if decision:
+        category = decision.category
+        action = "safe_completed" if decision.action == "safe_complete" else "blocked"
+        severity = decision.severity
+        rule_ids = decision.rule_ids
+        reason = decision.reason
+    elif output_validation:
+        category = output_validation.category
+        action = "redacted"
+        severity = output_validation.severity
+        rule_ids = output_validation.rule_ids
+        reason = output_validation.reason
+    else:
+        category = "provider_error"
+        action = "failed"
+        severity = "warning"
+        rule_ids = ("GR-PROVIDER-001",)
+        reason = "Falha na geracao ou persistencia da resposta." if provider_error else None
+
+    try:
+        await workspace.insert_ai_guardrail_event(
+            guardrails.event_payload(
+                actor=actor,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                stage=stage,
+                category=category,
+                action=action,
+                severity=severity,
+                rule_ids=rule_ids,
+                reason=reason,
+                content=content,
+                message_id=message_id,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "Could not persist AI guardrail event",
+            extra={"chat_scope": chat_scope, "chat_id": chat.get("id"), "stage": stage},
+        )
 
 
 async def _list_legacy_chats(
