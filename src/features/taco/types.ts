@@ -22,17 +22,35 @@ export type TacoFoodRecord = {
   phosphorus_mg: number | null
   potassium_mg: number | null
   protein_g: number | null
+  publication_year: number
   pyridoxine_mg: number | null
   rae_mcg: number | null
   re_mcg: number | null
   retinol_mcg: number | null
   riboflavin_mg: number | null
+  reference_basis: string
+  reference_quantity_g: number
+  relevance?: number
   search_name: string | null
   sodium_mg: number | null
+  source: string
+  source_edition: string
+  source_url: string
   thiamine_mg: number | null
   updated_at?: string | null
   vitamin_c_mg: number | null
   zinc_mg: number | null
+  match_kind?: 'browse' | 'exact' | 'prefix' | 'full_text' | 'similar'
+  total_count?: number
+}
+
+export type TacoCalculatedNutrients = {
+  carbohydrate_g: number | null
+  energy_kcal: number | null
+  fiber_g: number | null
+  lipid_g: number | null
+  protein_g: number | null
+  sodium_mg: number | null
 }
 
 export type TacoNutrientTotals = {

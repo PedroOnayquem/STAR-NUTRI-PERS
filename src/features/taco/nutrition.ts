@@ -1,5 +1,5 @@
 import type { DietMealFood, DietMealRecord } from '../clinical/types'
-import type { TacoFoodRecord, TacoNutrientTotals } from './types'
+import type { TacoCalculatedNutrients, TacoFoodRecord, TacoNutrientTotals } from './types'
 
 export const EMPTY_NUTRIENT_TOTALS: TacoNutrientTotals = {
   carbohydrate_g: 0,
@@ -13,11 +13,17 @@ export const EMPTY_NUTRIENT_TOTALS: TacoNutrientTotals = {
 export function calculateFoodNutrients(
   food: Pick<
     TacoFoodRecord,
-    'carbohydrate_g' | 'energy_kcal' | 'fiber_g' | 'lipid_g' | 'protein_g' | 'sodium_mg'
+    | 'carbohydrate_g'
+    | 'energy_kcal'
+    | 'fiber_g'
+    | 'lipid_g'
+    | 'protein_g'
+    | 'reference_quantity_g'
+    | 'sodium_mg'
   >,
   quantityG: number,
-): TacoNutrientTotals {
-  const factor = safeQuantity(quantityG) / 100
+): TacoCalculatedNutrients {
+  const factor = safeQuantity(quantityG) / foodReferenceQuantity(food)
   return {
     carbohydrate_g: roundNutrient(food.carbohydrate_g, factor),
     energy_kcal: roundNutrient(food.energy_kcal, factor),
@@ -119,7 +125,7 @@ function hasAnyTotal(totals: TacoNutrientTotals) {
 }
 
 function roundNutrient(value: number | null | undefined, factor: number) {
-  return round((value ?? 0) * factor)
+  return value === null || value === undefined ? null : round(value * factor)
 }
 
 function round(value: number) {
@@ -128,6 +134,12 @@ function round(value: number) {
 
 function safeQuantity(value: number) {
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function foodReferenceQuantity(food: { reference_quantity_g?: number }) {
+  return Number.isFinite(food.reference_quantity_g) && Number(food.reference_quantity_g) > 0
+    ? Number(food.reference_quantity_g)
+    : 100
 }
 
 function formatQuantity(value: number) {

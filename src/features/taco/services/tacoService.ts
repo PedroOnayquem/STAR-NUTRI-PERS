@@ -3,13 +3,6 @@ import { supabase } from '../../../lib/supabase'
 import type { DietMealItemRecord } from '../../clinical/types'
 import type { TacoFoodRecord, TacoSearchResult } from '../types'
 
-const SELECT_COLUMNS = `
-  id,code,name,search_name,normalized_name,category,moisture_g,energy_kcal,energy_kj,protein_g,lipid_g,
-  cholesterol_mg,carbohydrate_g,fiber_g,ash_g,calcium_mg,magnesium_mg,manganese_mg,
-  phosphorus_mg,iron_mg,sodium_mg,potassium_mg,copper_mg,zinc_mg,retinol_mcg,re_mcg,
-  rae_mcg,thiamine_mg,riboflavin_mg,pyridoxine_mg,niacin_mg,vitamin_c_mg,created_at,updated_at
-`
-
 function getClient() {
   if (!supabase) {
     throw new Error(USER_MESSAGES.unavailableConfig)
@@ -33,44 +26,28 @@ export async function searchTacoFoods({
   query: string
 }): Promise<TacoSearchResult> {
   const client = getClient()
-  const from = Math.max(page - 1, 0) * pageSize
-  const to = from + pageSize - 1
-  const term = query.trim()
-
-  let request = client
-    .from('taco_foods')
-    .select(SELECT_COLUMNS, { count: 'exact' })
-    .order('name', { ascending: true })
-    .range(from, to)
-
-  if (category) {
-    request = request.eq('category', category)
-  }
-
-  if (term) {
-    const raw = cleanSearchTerm(term)
-    const normalized = normalizeSearchText(term)
-    request = request.or(`name.ilike.%${raw}%,search_name.ilike.%${normalized}%,normalized_name.ilike.%${normalized}%`)
-  }
-
-  const { count, data, error } = await request.returns<TacoFoodRecord[]>()
+  const offset = Math.max(page - 1, 0) * pageSize
+  const { data: rawData, error } = await client.rpc('search_taco_foods', {
+    p_category: category || null,
+    p_limit: pageSize,
+    p_offset: offset,
+    p_query: query.trim(),
+  })
   if (error) throwTacoError(error.message)
+  const data = (rawData ?? []) as unknown as TacoFoodRecord[]
 
   return {
-    count: count ?? 0,
+    count: Number(data?.[0]?.total_count ?? 0),
     foods: data ?? [],
   }
 }
 
 export async function listTacoCategories() {
   const client = getClient()
-  const { data, error } = await client
-    .from('taco_foods')
-    .select('category')
-    .not('category', 'is', null)
-    .order('category', { ascending: true })
+  const { data: rawData, error } = await client.rpc('list_taco_categories')
 
   if (error) throwTacoError(error.message)
+  const data = (rawData ?? []) as unknown as Array<{ category: string | null }>
 
   return Array.from(
     new Set(
@@ -110,8 +87,4 @@ export function normalizeSearchText(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
-}
-
-function cleanSearchTerm(value: string) {
-  return value.replace(/[%',().]/g, ' ').replace(/\s+/g, ' ').trim()
 }

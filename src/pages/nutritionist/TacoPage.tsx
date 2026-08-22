@@ -97,7 +97,7 @@ export function TacoPage() {
       <SectionHeader
         eyebrow="Base de alimentos"
         title="Tabela TACO"
-        description="Composição nutricional por 100g."
+        description="Composição nutricional oficial da TACO por 100 g de parte comestível."
       />
 
       <section className="overflow-hidden rounded-2xl border border-cyan-300/15 bg-[#061020]/95 text-slate-100 shadow-[0_28px_90px_rgba(2,6,23,0.24)]">
@@ -273,6 +273,9 @@ function FoodDetails({
         </h2>
         <p className="mt-2 text-sm text-slate-400">
           {food.category || 'Sem categoria'}{food.code ? ` - código ${food.code}` : ''}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          {food.source} · {food.source_edition} · {food.publication_year}
         </p>
       </div>
 
