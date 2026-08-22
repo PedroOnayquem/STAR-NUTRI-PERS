@@ -2328,24 +2328,100 @@ class SupabaseWorkspaceService:
         food_id: str | None = None,
         query: str | None = None,
     ) -> dict | None:
-        if food_id:
-            return await self.get_taco_food(food_id)
-        if not query:
+        resolution = await self.resolve_taco_food(food_id=food_id, query=query)
+        if resolution["confidence"] in {"exact", "probable"}:
+            return resolution.get("food")
+        if resolution["confidence"] in {"not_found", "missing_query"}:
             return None
-        foods = await self.search_taco_foods(query=query, limit=6)
-        if not foods:
-            return None
-        exact = next((food for food in foods if food.get("match_kind") == "exact"), None)
-        if exact:
-            return await self.get_taco_food(exact["id"])
-        if len(foods) == 1:
-            return await self.get_taco_food(foods[0]["id"])
 
-        candidates = ", ".join(food.get("name", "") for food in foods[:5])
+        candidates = ", ".join(
+            food.get("name", "") for food in resolution.get("candidates", [])[:5]
+        )
         raise ValueError(
             "O alimento informado e ambiguo na TACO. Informe uma opcao mais especifica: "
             f"{candidates}."
         )
+
+    async def resolve_taco_food(
+        self,
+        *,
+        food_id: str | None = None,
+        query: str | None = None,
+        limit: int = 10,
+    ) -> dict:
+        """Resolve a TACO sem transformar similaridade em fato automaticamente."""
+        if food_id:
+            try:
+                food = await self.get_taco_food(food_id)
+            except HTTPException as exc:
+                if exc.status_code == status.HTTP_404_NOT_FOUND:
+                    return {
+                        "confidence": "not_found",
+                        "query": query,
+                        "food": None,
+                        "candidates": [],
+                    }
+                raise
+            return {
+                "confidence": "exact",
+                "query": query,
+                "food": food,
+                "candidates": [],
+            }
+
+        if not query or not query.strip():
+            return {
+                "confidence": "missing_query",
+                "query": query,
+                "food": None,
+                "candidates": [],
+            }
+
+        foods = await self.search_taco_foods(query=query, limit=limit)
+        if not foods:
+            return {
+                "confidence": "not_found",
+                "query": query,
+                "food": None,
+                "candidates": [],
+            }
+
+        exact_matches = [food for food in foods if food.get("match_kind") == "exact"]
+        if len(exact_matches) == 1:
+            food = await self.get_taco_food(exact_matches[0]["id"])
+            return {
+                "confidence": "exact",
+                "query": query,
+                "food": {**food, "match_kind": "exact"},
+                "candidates": [],
+            }
+
+        if len(foods) == 1:
+            food = await self.get_taco_food(foods[0]["id"])
+            return {
+                "confidence": "probable",
+                "query": query,
+                "food": {**food, "match_kind": foods[0].get("match_kind")},
+                "candidates": [],
+            }
+
+        top_relevance = float(foods[0].get("relevance") or 0)
+        second_relevance = float(foods[1].get("relevance") or 0)
+        if top_relevance >= second_relevance + 20:
+            food = await self.get_taco_food(foods[0]["id"])
+            return {
+                "confidence": "probable",
+                "query": query,
+                "food": {**food, "match_kind": foods[0].get("match_kind")},
+                "candidates": foods[1:4],
+            }
+
+        return {
+            "confidence": "ambiguous",
+            "query": query,
+            "food": None,
+            "candidates": foods[:6],
+        }
 
     async def calculate_taco_food_nutrients(
         self,

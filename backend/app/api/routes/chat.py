@@ -506,6 +506,28 @@ async def _stream_chat_response(
                     output_validation=output_validation,
                 )
             answer = output_validation.content
+            try:
+                await agent_service.record_run_trace(
+                    actor=actor,
+                    answer=answer,
+                    actions=agent_actions,
+                    chat=session,
+                    chat_scope=chat_scope,
+                    context=context,
+                    message=user_message,
+                    output_allowed=output_validation.allowed,
+                    output_category=output_validation.category,
+                    user_message=payload.content,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not persist AI run trace",
+                    extra={
+                        "chat_scope": chat_scope,
+                        "chat_id": session.get("id"),
+                        "message_id": user_message.get("id"),
+                    },
+                )
             yield _event("delta", {"content": answer})
 
             saved = await workspace.insert_chat_message(
@@ -726,39 +748,40 @@ def _with_agent_actions(system_prompt: str, actions: list[dict]) -> str:
 
     return (
         f"{system_prompt}\n\n"
-        "Acoes operacionais avaliadas antes desta resposta:\n"
+        "<authoritative_tool_evidence>\n"
         f"{json.dumps(actions, ensure_ascii=False, default=str)}\n\n"
-        "Ao responder, use apenas o resultado real acima. Informe sucesso somente quando "
-        "success=true e status=executed. Para status failed/skipped, diga que a acao nao foi "
-        "concluida e mostre o motivo em error/summary. Se houver result.pending_observation, "
-        "pergunte se o usuario deseja adicionar essa observacao; a proxima resposta curta "
-        "deve confirmar somente essa pending_action."
+        "</authoritative_tool_evidence>\n\n"
+        "Produza a resposta para o objetivo final do usuario, nao um relatorio de tools. "
+        "Busca de candidatos nao e resposta nutricional. Use numeros somente de uma leitura ou "
+        "calculo authoritative concluido e preserve unidade, alimento, quantidade e fonte. "
+        "Se result.resolution=ambiguous ou requires_clarification=true, nao escolha nem calcule: "
+        "apresente poucas opcoes relevantes e faca uma pergunta focada. Para not_found, informe a ausencia. "
+        "Para status failed/skipped, nao alegue conclusao e explique o bloqueio naturalmente. "
+        "Confirme escrita apenas com success=true e status=executed. Se houver pending_observation, "
+        "pergunte se deve adiciona-la. Antes de finalizar, confirme que respondeu cada parte pedida, "
+        "que todo numero tem evidencia acima e que a fonte solicitada foi identificada."
     )
 
 
 def _answer_from_agent_actions(actions: list[dict]) -> str | None:
-    if not actions:
+    decisive = [
+        action
+        for action in actions
+        if action.get("status") == "pending_confirmation"
+        or action.get("tool") in {"conversation_state", "tool_orchestration"}
+    ]
+    if not decisive:
         return None
 
-    lines: list[str] = []
-    for action in actions:
-        status_value = action.get("status")
-        result = action.get("result") or {}
-        summary = (
-            result.get("summary")
+    return "\n".join(
+        str(
+            (action.get("result") or {}).get("summary")
             or action.get("summary")
             or action.get("error")
-            or "Ação avaliada."
-        )
-        if action.get("success") is True and status_value == "executed":
-            lines.append(str(summary))
-        elif status_value == "pending_confirmation":
-            lines.append(str(summary))
-        else:
-            reason = action.get("error") or summary
-            lines.append(f"Não foi possível concluir esta ação. Motivo: {reason}")
-
-    return "\n".join(line.strip() for line in lines if line).strip() or None
+            or "A acao nao foi concluida."
+        ).strip()
+        for action in decisive
+    ).strip() or None
 
 
 def _debug_context_payload(context: dict) -> dict:

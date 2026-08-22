@@ -159,6 +159,7 @@ DOCUMENT_CLAIM_PATTERN = re.compile(
 )
 
 NUTRIENT_NUMBER_PATTERN = re.compile(
+    r"\b\d+(?:[,.]\d+)?\s*kcal\b|"
     r"\b\d+(?:[,.]\d+)?\s*(?:kcal|g|mg)\b.{0,45}\b(?:prote[ií]na|carboidrato|gordura|fibra|por[cç][aã]o|100\s*g)\b|"
     r"\b(?:prote[ií]na|carboidrato|gordura|fibra|por[cç][aã]o|100\s*g)\b.{0,45}\b\d+(?:[,.]\d+)?\s*(?:kcal|g|mg)\b",
     re.IGNORECASE | re.DOTALL,
@@ -483,17 +484,40 @@ class AiGuardrailService:
                     severity="high",
                 )
 
-        nutrient_match = NUTRIENT_NUMBER_PATTERN.search(clean)
-        if nutrient_match:
+        nutrient_matches = list(NUTRIENT_NUMBER_PATTERN.finditer(clean))
+        if nutrient_matches:
+            authoritative_nutrition_actions = [
+                action
+                for action in successful_actions
+                if action.get("tool")
+                in {
+                    "add_taco_food_to_meal",
+                    "calculate_taco_food_nutrients",
+                    "get_taco_food",
+                    "resolve_taco_nutrition",
+                }
+                and (action.get("result") or {}).get("resolution")
+                not in {"ambiguous", "not_found", "missing_query"}
+            ]
             nutrient_numbers = self._numbers_from(
                 {
                     "diets": context.get("diets", []),
-                    "actions": [action.get("result") for action in successful_actions],
+                    "actions": [
+                        action.get("result")
+                        for action in authoritative_nutrition_actions
+                    ],
                 }
+            )
+            nutrient_numbers.update(
+                self._derived_nutrition_totals(authoritative_nutrition_actions)
             )
             claimed_numbers = {
                 _canonical_number(value)
-                for value in re.findall(r"\d+(?:[,.]\d+)?", nutrient_match.group(0))
+                for nutrient_match in nutrient_matches
+                for value in re.findall(
+                    r"\d+(?:[,.]\d+)?",
+                    nutrient_match.group(0),
+                )
                 if _canonical_number(value) not in {"", "100"}
             }
             if claimed_numbers and not claimed_numbers.issubset(nutrient_numbers):
@@ -503,6 +527,14 @@ class AiGuardrailService:
                     "GR-OUT-009",
                     "A resposta continha valor nutricional exato sem fonte no contexto.",
                     severity="high",
+                )
+            if authoritative_nutrition_actions and "taco" not in _normalize(clean):
+                return self._blocked_output(
+                    "Os valores foram consultados na TACO, mas a resposta não identificou a fonte com clareza.",
+                    "missing_nutrition_source",
+                    "GR-OUT-010",
+                    "A resposta omitiu a fonte TACO usada no calculo nutricional.",
+                    severity="warning",
                 )
 
         return OutputValidation(content=clean, allowed=True)
@@ -597,6 +629,33 @@ class AiGuardrailService:
                 "actions": [action.get("result") for action in actions],
             }
         )
+
+    def _derived_nutrition_totals(self, actions: list[dict]) -> set[str]:
+        nutrient_keys = {
+            "energy_kcal",
+            "protein_g",
+            "carbohydrate_g",
+            "lipid_g",
+            "fiber_g",
+            "sodium_mg",
+        }
+        values_by_nutrient: dict[str, list[float]] = {
+            key: [] for key in nutrient_keys
+        }
+        for action in actions:
+            nutrients = (action.get("result") or {}).get("nutrients") or {}
+            if not isinstance(nutrients, dict):
+                continue
+            for key in nutrient_keys:
+                value = nutrients.get(key)
+                if isinstance(value, int | float):
+                    values_by_nutrient[key].append(float(value))
+
+        return {
+            _canonical_number(str(round(sum(values), 2)))
+            for values in values_by_nutrient.values()
+            if len(values) >= 2
+        }
 
     def _numbers_from(self, payload: Any) -> set[str]:
         numbers: set[str] = set()

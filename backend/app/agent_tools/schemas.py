@@ -297,8 +297,47 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "resolve_taco_nutrition",
+            "description": (
+                "Conclui uma consulta nutricional baseada na TACO: resolve o alimento, "
+                "classifica a correspondência como exact/probable/ambiguous/not_found e, "
+                "quando segura, calcula deterministicamente os nutrientes para quantity_g. "
+                "Use como primeira opção quando o usuário pedir calorias, macros ou nutrientes. "
+                "Se o alimento ou a quantidade estiver no histórico, preserve esse contexto. "
+                "Retorna alimento, quantidade, base de referência, nutrientes, fonte e candidatos "
+                "quando precisar de esclarecimento. Nunca escolha uma opção ambiguous."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "food_id": {"type": "string"},
+                    "food_name": {
+                        "description": "Nome do alimento extraído da mensagem ou do contexto recente.",
+                        "type": "string",
+                    },
+                    "quantity_g": {
+                        "description": "Quantidade em gramas; use 100 somente quando nenhuma quantidade foi informada.",
+                        "type": "number",
+                    },
+                    "requested_nutrients": {
+                        "description": "Nutrientes pedidos, como energy_kcal, protein_g ou sodium_mg.",
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["food_name", "quantity_g"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_taco_foods",
-            "description": "Busca alimentos reais na Tabela Brasileira de Composição de Alimentos (TACO). Use antes de responder sobre alimento da TACO.",
+            "description": (
+                "Localiza candidatos reais na TACO e retorna correspondências estruturadas. "
+                "Serve para descoberta e NÃO conclui perguntas sobre calorias ou macros. "
+                "Para alimento e quantidade, use resolve_taco_nutrition."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -314,7 +353,10 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_taco_food",
-            "description": "Obtém a composição por 100g de um alimento da TACO por ID ou por nome aproximado.",
+            "description": (
+                "Obtém a composição-fonte por 100g de uma entrada TACO já identificada. "
+                "Não converte quantidade; use resolve_taco_nutrition para responder calorias ou macros."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -328,7 +370,10 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate_taco_food_nutrients",
-            "description": "Calcula nutrientes de um alimento TACO para uma quantidade em gramas. Não use valores inventados.",
+            "description": (
+                "Calcula nutrientes quando o food_id ou nome específico já foi resolvido. "
+                "Não escolha candidatos ambíguos. Para linguagem natural, prefira resolve_taco_nutrition."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
