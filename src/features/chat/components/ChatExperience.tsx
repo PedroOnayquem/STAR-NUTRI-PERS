@@ -19,15 +19,11 @@ import {
   BrainCircuit,
   Check,
   ChevronDown,
-  CircleAlert,
-  CircleCheck,
-  Clock,
   Loader2,
   MessageSquarePlus,
   Mic,
   Search,
   Send,
-  XCircle,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Button } from '../../../components/ui/Button'
@@ -992,21 +988,6 @@ function isReasoningLevel(value: string | null): value is AiReasoningLevel {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'ultra'
 }
 
-type AgentAction = {
-  error?: string | null
-  label?: string
-  requires_confirmation?: boolean
-  status?:
-    | 'executed'
-    | 'skipped'
-    | 'failed'
-    | 'pending_confirmation'
-    | 'waiting_clarification'
-    | 'blocked'
-  summary?: string | null
-  tool?: string
-}
-
 const MessageBubble = memo(function MessageBubble({
   message,
   own,
@@ -1016,8 +997,6 @@ const MessageBubble = memo(function MessageBubble({
   own: boolean
   streaming?: boolean
 }) {
-  const actions = getAgentActions(message.metadata)
-
   return (
     <div className={cn('flex', own ? 'justify-end' : 'justify-start')}>
       <div
@@ -1029,7 +1008,6 @@ const MessageBubble = memo(function MessageBubble({
         )}
       >
         <MarkdownContent content={message.content} />
-        {!own && actions.length > 0 && <AgentActionList actions={actions} />}
         {streaming && (
           <span className="mt-2 inline-flex h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_18px_rgba(34,211,238,0.55)]" />
         )}
@@ -1037,76 +1015,6 @@ const MessageBubble = memo(function MessageBubble({
     </div>
   )
 })
-
-function AgentActionList({ actions }: { actions: AgentAction[] }) {
-  return (
-    <div className="mt-3 space-y-2">
-      {actions.map((action, index) => {
-        const status = action.status ?? 'skipped'
-        const Icon = actionIcon(status)
-        return (
-          <div
-            className={cn(
-              'flex items-start gap-2 rounded-2xl border px-3 py-2 text-xs leading-5',
-              actionTone(status),
-            )}
-            key={`${action.tool ?? 'action'}-${index}`}
-          >
-            <Icon className="mt-0.5 shrink-0" size={15} />
-            <div className="min-w-0">
-              <p className="font-black">{action.label ?? 'Ação realizada'}</p>
-              <p className="mt-0.5 text-[11px] leading-5 opacity-80">
-                {actionStatusLabel(status)}
-              </p>
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function actionStatusLabel(status: AgentAction['status']) {
-  if (status === 'executed') return 'Confirmado pelo sistema'
-  if (status === 'pending_confirmation') return 'Aguardando sua confirmação'
-  if (status === 'waiting_clarification') return 'Aguardando seu esclarecimento'
-  if (status === 'blocked') return 'Bloqueado com segurança'
-  if (status === 'failed') return 'Não concluído'
-  return 'Não executado'
-}
-
-function getAgentActions(metadata: ChatMessageRecord['metadata']): AgentAction[] {
-  const raw = metadata?.agent_actions
-  if (!Array.isArray(raw)) return []
-  return raw.filter((item): item is AgentAction => Boolean(item && typeof item === 'object'))
-}
-
-function actionIcon(status: AgentAction['status']) {
-  if (status === 'executed') return CircleCheck
-  if (status === 'pending_confirmation') return Clock
-  if (status === 'waiting_clarification') return Clock
-  if (status === 'failed') return XCircle
-  return CircleAlert
-}
-
-function actionTone(status: AgentAction['status']) {
-  if (status === 'executed') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200'
-  }
-  if (status === 'pending_confirmation') {
-    return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'
-  }
-  if (status === 'waiting_clarification') {
-    return 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-200'
-  }
-  if (status === 'blocked') {
-    return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'
-  }
-  if (status === 'failed') {
-    return 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200'
-  }
-  return 'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300'
-}
 
 function MarkdownContent({ content }: { content: string }) {
   return (
