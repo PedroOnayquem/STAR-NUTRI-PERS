@@ -61,10 +61,10 @@ Continuam disponíveis para fluxos em que uma entrada já está identificada. O 
 
 No catálogo real, “arroz” é ambíguo porque inclui integral/cozido, integral/cru, tipo 1/cozido, tipo 1/cru, tipo 2 e preparações diferentes. O sistema não escolhe uma dessas entradas arbitrariamente. A conversa testada foi:
 
-1. “Quantas calorias tem 150g de arroz segundo a tabela TACO?”
-2. IA pede o tipo/preparo.
-3. “Considere arroz tipo 1 cozido.”
-4. IA mantém os 150 g e responde 192 kcal segundo a TACO.
+1. “Quantas calorias tem 150g de arroz integral segundo a tebela taco?”
+2. IA pede se o alimento é cru ou cozido.
+3. “cozido”
+4. IA recupera os 150 g do estado de tarefa e responde 186 kcal segundo a TACO.
 
 Uma pergunta já específica — “Quantas calorias tem 150g de arroz tipo 1 cozido segundo a TACO?” — é respondida em uma etapa com 192 kcal.
 
@@ -85,7 +85,7 @@ Para pacientes, peso, lesões, condições, dietas e treinos precisam vir das to
 
 ## Contexto e linguagem natural
 
-O histórico é enviado ao orquestrador. Assim, referências como “e em 150g?” podem reutilizar um alimento explicitamente estabelecido na conversa. As descrições das tools e o prompt foram escritos por objetivo, não como mapa rígido de palavras, permitindo variações de ordem, abreviações e erros de digitação.
+O histórico continua sendo enviado ao orquestrador para naturalidade, mas deixou de ser a única memória operacional. Domínio, intenção, quantidade, alimento, preparo, ambiguidades e tools permitidas ficam em slots estruturados por conversa. Assim, continuações curtas reutilizam parâmetros confirmados sem depender de o modelo reler corretamente toda a janela de texto. Veja `AI_ACTIVE_TASK_ARCHITECTURE.md`.
 
 ## Observabilidade segura
 
@@ -120,4 +120,4 @@ Os scripts de avaliação são:
 - `backend/scripts/evaluate_agent_pipeline.py`: OpenAI real + TACO remota, somente leitura;
 - `backend/scripts/real_taco_chat_e2e.py`: FastAPI/SSE real com usuário temporário e limpeza obrigatória.
 
-Não foi necessária migration: as tabelas TACO, RPC de cálculo e `ai_action_logs` já suportavam os dados estruturados e o trace. A mudança é de orquestração, serviços e validação.
+A migration `20260822163204_harden_ai_active_task_state.sql` ampliou o estado por conversa e adicionou o lease atômico de processamento. As tabelas TACO, a RPC de cálculo e `ai_action_logs` permanecem as fontes estruturadas de dados e auditoria.
