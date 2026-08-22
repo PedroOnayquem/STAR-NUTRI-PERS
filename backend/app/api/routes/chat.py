@@ -417,6 +417,7 @@ async def _stream_chat_response(
         chat_scope=chat_scope,
         context=context,
         token=token,
+        user_message=payload.content,
     )
     if settings.app_env == "development":
         print(
