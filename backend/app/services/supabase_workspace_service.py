@@ -1645,6 +1645,32 @@ class SupabaseWorkspaceService:
         )
         return await self._get_row_by_id("ai_conversation_memories", rows[0]["id"])
 
+    async def search_conversation_memories(
+        self,
+        *,
+        query: str,
+        chat_type: str,
+        user_id: str,
+        patient_id: str | None,
+        nutritionist_id: str | None,
+        limit: int = 6,
+    ) -> list[dict]:
+        if not query.strip():
+            return []
+        result = await self._request(
+            "POST",
+            "/rest/v1/rpc/search_ai_conversation_memories",
+            json={
+                "p_user_id": user_id,
+                "p_chat_type": chat_type,
+                "p_patient_id": patient_id,
+                "p_nutritionist_id": nutritionist_id,
+                "p_query": query,
+                "p_limit": min(max(limit, 1), 12),
+            },
+        )
+        return result if isinstance(result, list) else []
+
     async def list_ai_action_logs_for_context(
         self,
         *,
@@ -1660,7 +1686,7 @@ class SupabaseWorkspaceService:
             "user_id": f"eq.{user_id}",
             "select": (
                 "id,conversation_id,patient_id,nutritionist_id,tool_name,intent,"
-                "status,success,requires_confirmation,result,error_message,created_at"
+                "status,success,requires_confirmation,result,error_message,duration_ms,created_at"
             ),
             "order": "created_at.desc",
             "limit": str(limit),
