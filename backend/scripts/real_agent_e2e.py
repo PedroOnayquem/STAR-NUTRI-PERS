@@ -13,10 +13,15 @@ import os
 import secrets
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import httpx
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.core.config import settings
 
@@ -135,7 +140,11 @@ def _send(
         json=payload,
         timeout=600,
     )
-    _require(response, {200}, f"send chat message: {content[:45]}")
+    if response.status_code != 200:
+        raise E2EFailure(
+            f"send chat message: {content[:45]}: "
+            f"HTTP {response.status_code}: {response.text[:800]}"
+        )
     events = _parse_sse(response.text)
     provider_errors = [data for event, data in events if event == "error"]
     if provider_errors:
@@ -221,6 +230,19 @@ def _cleanup(client: httpx.Client, state: dict[str, str]) -> list[str]:
                 lambda nutritionist_id=nutritionist_id: _delete(
                     client, "nutritionists", id=nutritionist_id
                 ),
+            )
+    # The chat stream may persist its final audit row near the end of the
+    # response. Repeat the restrictive-log cleanup immediately before users.
+    for user_key in ("nutritionist_user_id", "other_nutritionist_user_id", "patient_user_id"):
+        user_id = state.get(user_key)
+        if user_id:
+            attempt(
+                f"final ai_action_logs/{user_id}",
+                lambda user_id=user_id: _delete(client, "ai_action_logs", actor_user_id=user_id),
+            )
+            attempt(
+                f"final ai_guardrail_events/{user_id}",
+                lambda user_id=user_id: _delete(client, "ai_guardrail_events", actor_user_id=user_id),
             )
     for key in ("patient_user_id", "nutritionist_user_id", "other_nutritionist_user_id"):
         user_id = state.get(key)
@@ -387,7 +409,18 @@ def run() -> dict[str, Any]:
                 content="Gere um novo treino considerando a lesão registrada e substitua o treino atual.",
             )
             if not any(item.get("status") == "pending_confirmation" for item in replace_actions):
-                raise E2EFailure("training replacement did not request confirmation")
+                compact = [
+                    {
+                        "operation": item.get("operation"),
+                        "status": item.get("status"),
+                        "error_code": item.get("error_code"),
+                        "summary": item.get("summary"),
+                    }
+                    for item in replace_actions
+                ]
+                raise E2EFailure(
+                    f"training replacement did not request confirmation: {compact}"
+                )
             confirmation_actions, _ = _send(
                 client,
                 endpoint="chat/nutritionist/send",
@@ -481,6 +514,12 @@ def run() -> dict[str, Any]:
         finally:
             cleanup_failures = _cleanup(client, state)
             report["cleanup"] = "ok" if not cleanup_failures else cleanup_failures
+            if cleanup_failures:
+                print(
+                    "REAL E2E CLEANUP INCOMPLETE: "
+                    + json.dumps(cleanup_failures, ensure_ascii=False),
+                    file=sys.stderr,
+                )
 
     if report.get("cleanup") != "ok":
         raise E2EFailure(f"E2E passed but cleanup was incomplete: {report['cleanup']}")
