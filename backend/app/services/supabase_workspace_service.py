@@ -2280,25 +2280,15 @@ class SupabaseWorkspaceService:
         category: str | None = None,
         limit: int = 8,
     ) -> list[dict]:
-        params = {
-            "select": "*",
-            "order": "name.asc",
-            "limit": str(min(max(limit, 1), 20)),
-        }
-        safe_query = _postgrest_search_term(query)
-        if safe_query:
-            normalized = _normalize_search_text(safe_query)
-            params["or"] = (
-                f"(name.ilike.*{safe_query}*,search_name.ilike.*{normalized}*,"
-                f"normalized_name.ilike.*{normalized}*)"
-            )
-        if category:
-            params["category"] = f"eq.{category}"
-
         return await self._request(
-            "GET",
-            "/rest/v1/taco_foods",
-            params=params,
+            "POST",
+            "/rest/v1/rpc/search_taco_foods",
+            json={
+                "p_query": query.strip(),
+                "p_category": category,
+                "p_limit": min(max(limit, 1), 20),
+                "p_offset": 0,
+            },
         )
 
     async def get_taco_food(self, food_id: str) -> dict:
@@ -2317,6 +2307,19 @@ class SupabaseWorkspaceService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Alimento TACO nao encontrado.",
             )
+        nutrient_details = await self._request(
+            "GET",
+            "/rest/v1/taco_food_nutrients",
+            params={
+                "food_id": f"eq.{food_id}",
+                "select": (
+                    "nutrient_code,nutrient_name,amount,unit,value_status,"
+                    "source_value,source_sheet"
+                ),
+                "order": "nutrient_code.asc",
+            },
+        )
+        food["nutrient_details"] = nutrient_details
         return food
 
     async def find_taco_food(
@@ -2329,8 +2332,38 @@ class SupabaseWorkspaceService:
             return await self.get_taco_food(food_id)
         if not query:
             return None
-        foods = await self.search_taco_foods(query=query, limit=1)
-        return foods[0] if foods else None
+        foods = await self.search_taco_foods(query=query, limit=6)
+        if not foods:
+            return None
+        exact = next((food for food in foods if food.get("match_kind") == "exact"), None)
+        if exact:
+            return await self.get_taco_food(exact["id"])
+        if len(foods) == 1:
+            return await self.get_taco_food(foods[0]["id"])
+
+        candidates = ", ".join(food.get("name", "") for food in foods[:5])
+        raise ValueError(
+            "O alimento informado e ambiguo na TACO. Informe uma opcao mais especifica: "
+            f"{candidates}."
+        )
+
+    async def calculate_taco_food_nutrients(
+        self,
+        *,
+        food_id: str,
+        quantity_g: float,
+    ) -> dict:
+        rows = await self._request(
+            "POST",
+            "/rest/v1/rpc/calculate_taco_food_nutrients",
+            json={"p_food_id": food_id, "p_quantity_g": quantity_g},
+        )
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Quantidade invalida ou alimento TACO nao encontrado.",
+            )
+        return rows[0]
 
     async def create_diet_meal_item(
         self,
@@ -3498,10 +3531,6 @@ def _normalize_search_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
     return " ".join(re.sub(r"[^a-z0-9]+", " ", ascii_value.lower()).split())
-
-
-def _postgrest_search_term(value: str) -> str:
-    return " ".join(re.sub(r"[%*',().]", " ", str(value or "")).split())
 
 
 def calculate_age(birth_date: Any) -> int | None:

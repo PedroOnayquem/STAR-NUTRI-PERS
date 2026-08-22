@@ -303,7 +303,9 @@ class AiAgentService:
             "Não invente valores, horários, macros ou medidas ausentes.\n"
             "Para composição de alimentos, calorias, macros ou TACO, use search_taco_foods, "
             "get_taco_food ou calculate_taco_food_nutrients. Se o alimento não existir na TACO, "
-            "não invente valores; informe que não encontrou.\n"
+            "não invente valores; informe que não encontrou. Não escolha automaticamente entre "
+            "alimentos semelhantes: apresente as opções e peça esclarecimento. Preserve nutrientes "
+            "indisponíveis como indisponíveis e cite a fonte/edição retornada pela ferramenta.\n"
             "Quando a mensagem perguntar sobre dados de paciente, consulte o banco antes de responder: "
             "use o paciente em foco quando existir; se não existir foco, use search_patient_by_name "
             "para nomes citados e depois get_patient_profile, get_patient_metrics, "
@@ -1762,7 +1764,10 @@ class AiAgentService:
                 tool_name="calculate_taco_food_nutrients",
             )
 
-        nutrients = _calculate_taco_nutrients(food, quantity_g)
+        nutrients = await self.workspace.calculate_taco_food_nutrients(
+            food_id=food["id"],
+            quantity_g=quantity_g,
+        )
         return await self._record_action(
             actor=actor,
             after_state={"food": food, "nutrients": nutrients},
@@ -1873,7 +1878,10 @@ class AiAgentService:
             ),
             None,
         )
-        nutrients = _calculate_taco_nutrients(food, quantity_g)
+        nutrients = await self.workspace.calculate_taco_food_nutrients(
+            food_id=food["id"],
+            quantity_g=quantity_g,
+        )
         food_item = {
             "carbohydrate_g": nutrients["carbohydrate_g"],
             "energy_kcal": nutrients["energy_kcal"],
@@ -3394,7 +3402,7 @@ def _classify_tool_error(exc: Exception) -> tuple[str, str]:
     return "internal_error", "Ocorreu um erro interno. Nenhuma conclusão foi presumida."
 
 
-def _calculate_taco_nutrients(food: dict, quantity_g: float) -> dict[str, float]:
+def _calculate_taco_nutrients(food: dict, quantity_g: float) -> dict[str, float | None]:
     factor = quantity_g / 100
     return {
         "carbohydrate_g": _round_nutrient(food.get("carbohydrate_g"), factor),
@@ -3406,9 +3414,9 @@ def _calculate_taco_nutrients(food: dict, quantity_g: float) -> dict[str, float]
     }
 
 
-def _round_nutrient(value: Any, factor: float) -> float:
-    number = _number(value) or 0
-    return round(number * factor, 2)
+def _round_nutrient(value: Any, factor: float) -> float | None:
+    number = _number(value)
+    return None if number is None else round(number * factor, 2)
 
 
 def _compact_taco_food(food: dict) -> dict:
@@ -3423,6 +3431,12 @@ def _compact_taco_food(food: dict) -> dict:
         "lipid_g": food.get("lipid_g"),
         "fiber_g": food.get("fiber_g"),
         "sodium_mg": food.get("sodium_mg"),
+        "source": food.get("source"),
+        "source_edition": food.get("source_edition"),
+        "publication_year": food.get("publication_year"),
+        "reference_basis": food.get("reference_basis"),
+        "match_kind": food.get("match_kind"),
+        "nutrient_details": food.get("nutrient_details"),
     }
 
 
