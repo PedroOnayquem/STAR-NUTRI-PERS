@@ -15,6 +15,7 @@ ACTIVE_TASK_STATUSES = {
     "executing",
     "validating",
     "pending_confirmation",
+    "completed",
 }
 
 TACO_TOOLS = {
@@ -112,6 +113,8 @@ class ActiveTask:
     ambiguous_slots: list[str]
     allowed_tools: set[str]
     status: str
+    evidence: dict[str, Any]
+    context_entities: dict[str, Any]
     state_id: str | None = None
 
     @property
@@ -144,6 +147,8 @@ class AiTaskStateService:
             ambiguous_slots=list(state.get("ambiguous_slots") or []),
             allowed_tools=set(state.get("allowed_tools") or DOMAIN_TOOLS.get(domain, set())),
             status=status,
+            evidence=dict(state.get("task_evidence") or {}),
+            context_entities=dict(state.get("context_entities") or {}),
             state_id=state.get("id"),
         )
 
@@ -155,6 +160,16 @@ class AiTaskStateService:
     ) -> ActiveTask | None:
         active = self.from_state(state)
         detected_domain = self.detect_domain(user_message)
+        if (
+            active
+            and active.status == "completed"
+            and not self.should_continue_completed(
+                active=active,
+                detected_domain=detected_domain,
+                user_message=user_message,
+            )
+        ):
+            active = None
         if active and not self.is_explicit_switch(
             active=active,
             detected_domain=detected_domain,
@@ -181,6 +196,8 @@ class AiTaskStateService:
                     ambiguous_slots=[],
                     allowed_tools=set(TACO_TOOLS),
                     status="ready" if not missing else "needs_clarification",
+                    evidence=dict(active.evidence),
+                    context_entities=dict(active.context_entities),
                     state_id=active.state_id,
                 )
             return self.merge_user_message(active, user_message)
@@ -205,6 +222,8 @@ class AiTaskStateService:
                     *(DOMAIN_TOOLS[domain] for domain in detected_domains)
                 ),
                 status="understand",
+                evidence={},
+                context_entities={},
             )
         domain = detected_domain or self.detect_domain(user_message)
         if not domain:
@@ -224,6 +243,8 @@ class AiTaskStateService:
                 ambiguous_slots=[],
                 allowed_tools=set(TACO_TOOLS),
                 status="ready" if not missing else "needs_clarification",
+                evidence={},
+                context_entities={},
             )
 
         initial_slots = self.extract_taco_slots(user_message)
@@ -236,6 +257,8 @@ class AiTaskStateService:
             ambiguous_slots=[],
             allowed_tools=set(DOMAIN_TOOLS.get(domain, set())),
             status="understand",
+            evidence={},
+            context_entities={},
         )
 
     def merge_user_message(self, active: ActiveTask, user_message: str) -> ActiveTask:
@@ -244,6 +267,13 @@ class AiTaskStateService:
 
         slots = dict(active.slots)
         updates = self.extract_taco_slots(user_message, continuation=True)
+        previous_food = _normalize(slots.get("food_name"))
+        updated_food = _normalize(updates.get("food_name"))
+        if updated_food and previous_food and updated_food != previous_food:
+            slots.pop("food_id", None)
+            slots.pop("candidates", None)
+            if "preparation" not in updates:
+                slots.pop("preparation", None)
         slots.update({key: value for key, value in updates.items() if value not in (None, "", [])})
 
         preparation = updates.get("preparation")
@@ -277,6 +307,8 @@ class AiTaskStateService:
             ambiguous_slots=ambiguous,
             allowed_tools=set(active.allowed_tools),
             status="ready" if not missing and not ambiguous else "waiting_user",
+            evidence=dict(active.evidence),
+            context_entities=dict(active.context_entities),
             state_id=active.state_id,
         )
 
@@ -300,6 +332,8 @@ class AiTaskStateService:
         result = action.get("result") if isinstance(action.get("result"), dict) else {}
         arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
         slots = {**active.slots, **arguments}
+        evidence = dict(active.evidence)
+        context_entities = dict(active.context_entities)
         ambiguous = list(active.ambiguous_slots)
         status = str(action.get("status") or "failed")
 
@@ -312,6 +346,17 @@ class AiTaskStateService:
         elif action.get("success"):
             status = "validating"
             ambiguous = []
+            evidence = self._merge_evidence(evidence, action)
+            food = result.get("food") if isinstance(result.get("food"), dict) else {}
+            if food.get("id"):
+                slots["food_id"] = food["id"]
+            if food.get("name"):
+                slots["food_name"] = food["name"]
+            patient_id = arguments.get("patient_id") or result.get("patient_id")
+            if not patient_id and action.get("entity") == "patient":
+                patient_id = result.get("entity_id")
+            if patient_id:
+                context_entities["patient_id"] = patient_id
         elif action.get("error_code") == "entity_not_found":
             status = "failed"
         elif action.get("status") == "blocked":
@@ -329,6 +374,8 @@ class AiTaskStateService:
             ambiguous_slots=ambiguous,
             allowed_tools=set(active.allowed_tools),
             status=status,
+            evidence=evidence,
+            context_entities=context_entities,
             state_id=active.state_id,
         )
 
@@ -358,6 +405,8 @@ class AiTaskStateService:
             "missing_slots": active.missing_slots,
             "ambiguous_slots": active.ambiguous_slots,
             "allowed_tools": sorted(active.allowed_tools),
+            "task_evidence": active.evidence,
+            "context_entities": active.context_entities,
             "last_message_id": last_message_id,
             "expires_at": expires_at,
         }
@@ -397,6 +446,38 @@ class AiTaskStateService:
     def is_continuation(self, user_message: str) -> bool:
         normalized = " ".join(_normalize(user_message).split())
         return bool(CONTINUATION_PATTERN.fullmatch(normalized)) or len(normalized.split()) <= 2
+
+    def is_referential_followup(self, user_message: str) -> bool:
+        normalized = " ".join(_normalize(user_message).split())
+        return self.is_continuation(user_message) or bool(
+            re.search(
+                r"^(?:e\b|agora\b.*\b(?:isso|ele|ela|esse|essa|mesmo|mesma)\b)|"
+                r"\b(?:dele|dela|disso|desse|dessa|mesmo paciente|mesma paciente|"
+                r"esse alimento|essa comida|esse treino|esse plano|o anterior|a anterior|"
+                r"qual deles|qual delas|qual tem mais|qual teve mais|quanto teria)\b",
+                normalized,
+            )
+        )
+
+    def should_continue_completed(
+        self,
+        *,
+        active: ActiveTask,
+        detected_domain: str | None,
+        user_message: str,
+    ) -> bool:
+        if self.is_referential_followup(user_message):
+            return detected_domain in {None, active.domain}
+        return False
+
+    def is_comparison_request(self, user_message: str) -> bool:
+        normalized = _normalize(user_message)
+        return bool(
+            re.search(
+                r"\b(qual|quais|compare|comparar|comparacao)\b.*\b(mais|menos|maior|menor)\b",
+                normalized,
+            )
+        )
 
     def is_taco_lookup(self, user_message: str) -> bool:
         normalized = _normalize(user_message)
@@ -456,6 +537,11 @@ class AiTaskStateService:
                 r"\b(?:de|do|da)\s+(?:\d+(?:[.,]\d+)?\s*(?:g|gramas?|kg)\s+de\s+)?(.+?)(?:\s+segundo|\s+(?:na|pela)\s+(?:tebela|tabela)|[?.!]|$)",
                 normalized,
             )
+            if not food_match:
+                food_match = re.search(
+                    r"\b(?:trocar|substituir|mudar)\s+(?:isso\s+)?(?:por|para)\s+(.+?)(?:[?.!]|$)",
+                    normalized,
+                )
             if food_match:
                 food_name = food_match.group(1).strip()
                 food_name = re.sub(r"\b(?:ta[ck]o|tbca)\b.*$", "", food_name).strip()
@@ -470,6 +556,35 @@ class AiTaskStateService:
                     slots["food_name"] = context_food.group(1).strip()
 
         return slots
+
+    def _merge_evidence(self, evidence: dict[str, Any], action: dict) -> dict[str, Any]:
+        result = action.get("result") if isinstance(action.get("result"), dict) else {}
+        arguments = action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+        item = {
+            "source_type": "FACT_FROM_TOOL",
+            "tool": action.get("tool") or action.get("operation"),
+            "entity": action.get("entity"),
+            "entity_id": action.get("entity_id"),
+            "arguments": {
+                key: arguments.get(key)
+                for key in (
+                    "food_id", "food_name", "patient_id", "patient_name",
+                    "quantity_g", "requested_nutrients",
+                )
+                if arguments.get(key) not in (None, "", [])
+            },
+            "result": {
+                key: result.get(key)
+                for key in (
+                    "food", "nutrients", "reference", "source", "resolution",
+                    "summary", "patient_id", "entity_id",
+                )
+                if result.get(key) not in (None, "", [], {})
+            },
+        }
+        items = list(evidence.get("items") or [])
+        items.append(item)
+        return {"items": items[-8:], "latest": item}
 
     def _missing(self, required: list[str], slots: dict[str, Any]) -> list[str]:
         return [slot for slot in required if slots.get(slot) in (None, "", [])]

@@ -4,7 +4,9 @@ import hashlib
 import json
 import logging
 import re
+import time
 import unicodedata
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -197,6 +199,30 @@ class AiAgentService:
             # patient, diet or training operation.
             return []
 
+        referenced_patient_id = (pending_state or {}).get("patient_id")
+        if (
+            chat_scope == "nutritionist"
+            and not context.get("patient")
+            and referenced_patient_id
+            and self.task_state.is_referential_followup(user_message)
+        ):
+            try:
+                hydrated = await self.workspace.get_patient_context_for_nutritionist(
+                    token,
+                    referenced_patient_id,
+                    include_chat_context=True,
+                )
+                context.clear()
+                context.update(hydrated)
+            except Exception:
+                logger.exception(
+                    "Could not hydrate the patient referenced by the active conversation",
+                    extra={
+                        "chat_id": chat.get("id"),
+                        "patient_id": referenced_patient_id,
+                    },
+                )
+
         active_task = await self._persist_task(
             actor=actor,
             active_task=active_task,
@@ -240,6 +266,29 @@ class AiAgentService:
                         summary=self._missing_slot_question(active_task.missing_slots),
                     )
                 ]
+            if self.task_state.is_comparison_request(user_message):
+                comparison = await self._compare_nutrition_evidence(
+                    actor=actor,
+                    active_task=active_task,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    message=user_message_record,
+                )
+                if comparison:
+                    active_task = self.task_state.from_action(
+                        active_task,
+                        comparison,
+                    )
+                    await self._persist_task(
+                        actor=actor,
+                        active_task=active_task,
+                        chat=chat,
+                        context=context,
+                        message=user_message_record,
+                        status="completed",
+                    )
+                    return [comparison]
             if not self._is_multi_food_request(user_message):
                 arguments = self.task_state.merge_tool_arguments(
                     active_task,
@@ -458,11 +507,17 @@ class AiAgentService:
             ))
 
         if actions:
-            final_task_status = (
-                "completed"
-                if all(action.get("status") != "failed" for action in actions)
-                else "failed"
-            )
+            statuses = {str(action.get("status") or "") for action in actions}
+            if "pending_confirmation" in statuses:
+                final_task_status = "pending_confirmation"
+            elif "waiting_clarification" in statuses:
+                final_task_status = "waiting_user"
+            elif "blocked" in statuses:
+                final_task_status = "blocked"
+            elif "failed" in statuses:
+                final_task_status = "failed"
+            else:
+                final_task_status = "completed"
             await self._persist_task(
                 actor=actor,
                 active_task=active_task,
@@ -484,14 +539,23 @@ class AiAgentService:
         status: str | None = None,
     ) -> ActiveTask:
         resolved_status = status or active_task.status
+        patient_id = (context.get("patient") or {}).get("id")
+        if patient_id:
+            active_task = replace(
+                active_task,
+                context_entities={
+                    **active_task.context_entities,
+                    "patient_id": patient_id,
+                },
+            )
         saved = await self.workspace.upsert_ai_conversation_state(
             self.task_state.payload(
                 active_task,
                 conversation_id=chat["id"],
                 user_id=actor["id"],
-                patient_id=(context.get("patient") or {}).get("id"),
+                patient_id=patient_id,
                 last_message_id=message["id"],
-                expires_at=(_sao_paulo_now() + timedelta(minutes=30)).isoformat(),
+                expires_at=(_sao_paulo_now() + timedelta(days=30)).isoformat(),
                 status=resolved_status,
             )
         )
@@ -504,6 +568,8 @@ class AiAgentService:
             ambiguous_slots=list(active_task.ambiguous_slots),
             allowed_tools=set(active_task.allowed_tools),
             status=resolved_status,
+            evidence=dict(active_task.evidence),
+            context_entities=dict(active_task.context_entities),
             state_id=saved.get("id") or active_task.state_id,
         )
 
@@ -572,6 +638,66 @@ class AiAgentService:
         )
         return len(quantities) > 1
 
+    async def _compare_nutrition_evidence(
+        self,
+        *,
+        actor: dict,
+        active_task: ActiveTask,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        message: dict,
+    ) -> dict | None:
+        comparable: dict[float, dict] = {}
+        expected_food_id = active_task.slots.get("food_id")
+        for item in active_task.evidence.get("items") or []:
+            if item.get("source_type") != "FACT_FROM_TOOL":
+                continue
+            arguments = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+            result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            food = result.get("food") if isinstance(result.get("food"), dict) else {}
+            nutrients = result.get("nutrients") if isinstance(result.get("nutrients"), dict) else {}
+            quantity = _quantity_grams(arguments.get("quantity_g"))
+            if (
+                quantity is None
+                or not nutrients
+                or (expected_food_id and food.get("id") != expected_food_id)
+            ):
+                continue
+            comparable[quantity] = {
+                "quantity_g": quantity,
+                "food": food,
+                "nutrients": nutrients,
+                "reference": result.get("reference"),
+                "source": result.get("source"),
+            }
+        comparisons = list(comparable.values())[-6:]
+        if len(comparisons) < 2:
+            return None
+        return await self._record_action(
+            actor=actor,
+            arguments={
+                "_started_monotonic": time.perf_counter(),
+                "food_id": expected_food_id,
+                "quantities_g": [item["quantity_g"] for item in comparisons],
+            },
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            intent=active_task.intent,
+            message=message,
+            result={
+                "purpose": "compare_authoritative_nutrition_results",
+                "resolution": "exact",
+                "comparisons": comparisons,
+                "source": comparisons[-1].get("source") or {"name": "TACO"},
+                "label": "Comparacao nutricional contextual",
+                "summary": "Comparacao concluida usando resultados TACO desta conversa.",
+            },
+            status="executed",
+            tool_name="compare_nutrition_evidence",
+        )
+
     def _build_tool_prompt(
         self,
         chat_scope: str,
@@ -614,6 +740,8 @@ class AiAgentService:
                     "ambiguous_slots": active_task.ambiguous_slots,
                     "status": active_task.status,
                     "allowed_tools": sorted(active_task.allowed_tools),
+                    "context_entities": active_task.context_entities,
+                    "authoritative_evidence": active_task.evidence,
                 }
                 if active_task
                 else None
@@ -694,6 +822,8 @@ class AiAgentService:
         message: dict,
         tool_name: str,
     ) -> dict:
+        arguments = dict(arguments)
+        arguments.setdefault("_started_monotonic", time.perf_counter())
         spec = self.registry.get(tool_name)
         nutritionist = context.get("nutritionist") or {}
         actor_owns_context = (
@@ -3330,6 +3460,12 @@ class AiAgentService:
             for key, value in arguments.items()
             if not str(key).startswith("_")
         }
+        started_monotonic = arguments.get("_started_monotonic")
+        duration_ms = (
+            max(0, round((time.perf_counter() - started_monotonic) * 1000))
+            if isinstance(started_monotonic, (int, float))
+            else None
+        )
         clean_arguments = _sanitize_audit_value(clean_arguments)
         resolved_intent = intent or str(arguments.get("_intent") or tool_name)
         success = status == "executed"
@@ -3356,6 +3492,7 @@ class AiAgentService:
             "error": error,
             "error_message": error,
             "error_code": error_code,
+            "duration_ms": duration_ms,
         }
         if old_value is not None:
             log_payload["old_value"] = _sanitize_audit_value(old_value)
@@ -3379,6 +3516,7 @@ class AiAgentService:
             "success": success,
             "summary": (result or {}).get("summary") or error,
             "tool": tool_name,
+            "duration_ms": duration_ms,
         }
 
     async def record_run_trace(
@@ -3394,6 +3532,7 @@ class AiAgentService:
         output_allowed: bool,
         output_category: str,
         user_message: str,
+        duration_ms: int | None = None,
     ) -> None:
         requires_clarification = any(
             (action.get("result") or {}).get("requires_clarification") is True
@@ -3459,6 +3598,7 @@ class AiAgentService:
                 answer.encode("utf-8", errors="ignore")
             ).hexdigest(),
             "summary": f"Execucao do agente finalizada como {final_decision}.",
+            "duration_ms": duration_ms,
         }
         message_hash = hashlib.sha256(
             user_message.encode("utf-8", errors="ignore")
@@ -3479,6 +3619,7 @@ class AiAgentService:
                 "status": "executed" if not failed else "failed",
                 "success": not failed,
                 "requires_confirmation": pending_confirmation,
+                "duration_ms": duration_ms,
                 "input": {
                     "message_id": message["id"],
                     "message_hash": message_hash,

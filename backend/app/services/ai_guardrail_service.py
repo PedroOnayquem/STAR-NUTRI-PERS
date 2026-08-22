@@ -493,6 +493,7 @@ class AiGuardrailService:
                 in {
                     "add_taco_food_to_meal",
                     "calculate_taco_food_nutrients",
+                    "compare_nutrition_evidence",
                     "get_taco_food",
                     "resolve_taco_nutrition",
                 }

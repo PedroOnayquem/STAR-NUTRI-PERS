@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -457,6 +458,7 @@ async def _stream_chat_response(
 
     async def event_stream():
         answer = ""
+        run_started_monotonic = time.perf_counter()
         yield _event("session", {"session_id": session["id"]})
 
         try:
@@ -518,6 +520,10 @@ async def _stream_chat_response(
                     output_allowed=output_validation.allowed,
                     output_category=output_validation.category,
                     user_message=payload.content,
+                    duration_ms=max(
+                        0,
+                        round((time.perf_counter() - run_started_monotonic) * 1000),
+                    ),
                 )
             except Exception:
                 logger.exception(
