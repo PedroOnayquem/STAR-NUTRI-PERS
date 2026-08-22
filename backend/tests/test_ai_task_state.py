@@ -122,6 +122,115 @@ class AiTaskStateTests(unittest.TestCase):
         self.assertEqual(task_b.domain, "patients")
         self.assertNotIn("quantity_g", task_b.slots)
 
+    def test_completed_task_inherits_food_source_and_nutrient_for_new_quantity(self):
+        state = self._completed_nutrition_state()
+
+        task = self.service.prepare_turn(
+            state=state,
+            user_message="e se for 120g tem quantas calorias?",
+        )
+
+        self.assertEqual(task.status, "ready")
+        self.assertEqual(task.slots["food_id"], "food-integral")
+        self.assertEqual(task.slots["food_name"], "Arroz, integral, cozido")
+        self.assertEqual(task.slots["quantity_g"], 120)
+        self.assertEqual(task.slots["source"], "TACO")
+        self.assertEqual(task.slots["requested_nutrients"], ["energy_kcal"])
+        self.assertEqual(task.evidence["latest"]["source_type"], "FACT_FROM_TOOL")
+
+    def test_completed_task_supports_successive_quantity_followups(self):
+        first = self.service.prepare_turn(
+            state=self._completed_nutrition_state(),
+            user_message="e 120g?",
+        )
+        first_state = self.service.payload(
+            first,
+            conversation_id="conversation-a",
+            user_id="user-a",
+            patient_id=None,
+            last_message_id="message-b",
+            expires_at="2026-09-22T20:00:00Z",
+            status="completed",
+        )
+        first_state["id"] = "state-a"
+
+        second = self.service.prepare_turn(state=first_state, user_message="e 200g?")
+
+        self.assertEqual(second.slots["quantity_g"], 200)
+        self.assertEqual(second.slots["food_id"], "food-integral")
+        self.assertEqual(second.intent, "taco_nutrition_lookup")
+
+    def test_completed_task_does_not_hijack_unrelated_conversation(self):
+        task = self.service.prepare_turn(
+            state=self._completed_nutrition_state(),
+            user_message="Oi, tudo bem?",
+        )
+
+        self.assertIsNone(task)
+
+    def test_food_replacement_clears_stale_food_identifier(self):
+        task = self.service.prepare_turn(
+            state=self._completed_nutrition_state(),
+            user_message="e se eu trocar por arroz branco cozido?",
+        )
+
+        self.assertEqual(task.slots["food_name"], "arroz branco cozido")
+        self.assertNotIn("food_id", task.slots)
+        self.assertEqual(task.slots["quantity_g"], 150)
+
+    def test_quantity_without_any_context_correctly_requires_food(self):
+        task = self.service.prepare_turn(
+            state=None,
+            user_message="e se for 120g tem quantas calorias?",
+        )
+
+        self.assertEqual(task.intent, "taco_nutrition_lookup")
+        self.assertIn("food_name", task.missing_slots)
+
+    def test_comparison_followup_keeps_prior_authoritative_evidence(self):
+        state = self._completed_nutrition_state()
+        state["task_evidence"]["items"] = [
+            {
+                "source_type": "FACT_FROM_TOOL",
+                "arguments": {"quantity_g": 120},
+                "result": {"nutrients": {"energy_kcal": 148.8}},
+            },
+            {
+                "source_type": "FACT_FROM_TOOL",
+                "arguments": {"quantity_g": 200},
+                "result": {"nutrients": {"energy_kcal": 248}},
+            },
+        ]
+        state["task_slots"]["quantity_g"] = 200
+
+        task = self.service.prepare_turn(
+            state=state,
+            user_message="qual tem mais calorias?",
+        )
+
+        self.assertEqual(task.slots["food_id"], "food-integral")
+        self.assertEqual(task.slots["quantity_g"], 200)
+        self.assertEqual(len(task.evidence["items"]), 2)
+
+    def test_protein_followup_inherits_chicken_and_changes_only_quantity(self):
+        task = self.service.new_task("Qual a proteina de 100g de frango cozido?")
+        state = self.service.payload(
+            task,
+            conversation_id="conversation-protein",
+            user_id="user-a",
+            patient_id=None,
+            last_message_id="message-protein",
+            expires_at="2026-09-22T20:00:00Z",
+            status="completed",
+        )
+        state["id"] = "state-protein"
+
+        followup = self.service.prepare_turn(state=state, user_message="e em 200g?")
+
+        self.assertEqual(followup.slots["food_name"], "frango cozido")
+        self.assertEqual(followup.slots["quantity_g"], 200)
+        self.assertEqual(followup.slots["requested_nutrients"], ["protein_g"])
+
     def _nutrition_state(self):
         return {
             "id": "state-a",
@@ -149,6 +258,33 @@ class AiTaskStateTests(unittest.TestCase):
                 "calculate_taco_food_nutrients",
             ],
         }
+
+    def _completed_nutrition_state(self):
+        state = self._nutrition_state()
+        state.update(
+            {
+                "task_status": "completed",
+                "ambiguous_slots": [],
+                "task_slots": {
+                    "food_id": "food-integral",
+                    "food_name": "Arroz, integral, cozido",
+                    "preparation": "cozido",
+                    "quantity_g": 150,
+                    "unit": "g",
+                    "source": "TACO",
+                    "requested_nutrients": ["energy_kcal"],
+                },
+                "task_evidence": {
+                    "latest": {
+                        "source_type": "FACT_FROM_TOOL",
+                        "tool": "resolve_taco_nutrition",
+                    },
+                    "items": [],
+                },
+                "context_entities": {},
+            }
+        )
+        return state
 
 
 if __name__ == "__main__":

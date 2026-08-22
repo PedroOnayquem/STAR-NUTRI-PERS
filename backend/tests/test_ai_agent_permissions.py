@@ -302,6 +302,56 @@ class AiAgentPermissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["success"])
         self.assertIn("update_patient_profile", workspace.mutations)
 
+    async def test_referential_followup_rehydrates_patient_from_conversation_state(self):
+        workspace = FakeWorkspace()
+        workspace.state = {
+            "id": "state-patient",
+            "conversation_id": self.chat["id"],
+            "user_id": NUTRITIONIST_USER_ID,
+            "patient_id": PATIENT_ID,
+            "task_domain": "patients",
+            "task_intent": "patients_task",
+            "task_status": "completed",
+            "task_slots": {"patient_id": PATIENT_ID, "patient_name": "Joao Silva"},
+            "required_slots": [],
+            "missing_slots": [],
+            "ambiguous_slots": [],
+            "allowed_tools": ["search_patient_by_name", "get_patient_profile"],
+            "task_evidence": {},
+            "context_entities": {"patient_id": PATIENT_ID},
+        }
+        general_context = {
+            "patient": None,
+            "nutritionist": {
+                "id": NUTRITIONIST_ID,
+                "user_id": NUTRITIONIST_USER_ID,
+            },
+            "conditions": [],
+            "variable_metrics": [],
+            "main_metrics": [],
+            "diets": [],
+            "workouts": [],
+        }
+
+        actions = await AiAgentService(
+            workspace,
+            FakeAi("get_patient_metrics", {}),
+        ).run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=general_context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="Qual o peso dele?",
+            user_message_record=self.message,
+        )
+
+        self.assertEqual(actions[0]["tool"], "get_patient_metrics")
+        self.assertTrue(actions[0]["success"])
+        self.assertEqual(general_context["patient"]["id"], PATIENT_ID)
+        self.assertEqual(workspace.state["patient_id"], PATIENT_ID)
+
     async def test_03_nutritionist_can_register_injury(self):
         workspace = FakeWorkspace()
         result = await self.execute(AiAgentService(workspace, FakeAi()), "register_injury", {"local": "Joelho", "description": "Dor no joelho", "severity": "Leve"})

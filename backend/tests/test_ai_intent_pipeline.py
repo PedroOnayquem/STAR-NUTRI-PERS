@@ -66,6 +66,28 @@ class TacoPipelineWorkspace(FakeWorkspace):
                     "reference_basis": "100 g de parte comestível",
                 },
             }
+        if food_id:
+            return {
+                "confidence": "exact",
+                "query": query,
+                "candidates": [],
+                "food": {
+                    "id": food_id,
+                    "name": "Arroz integral cozido",
+                    "energy_kcal": 128,
+                    "protein_g": 2.5,
+                    "carbohydrate_g": 28.1,
+                    "lipid_g": 0.2,
+                    "fiber_g": 1.6,
+                    "sodium_mg": 1,
+                    "source": "TACO",
+                    "source_edition": "4Âª ediÃ§Ã£o ampliada e revisada",
+                    "publication_year": 2011,
+                    "source_url": "https://example.test/taco.xlsx",
+                    "reference_quantity_g": 100,
+                    "reference_basis": "100 g de parte comestÃ­vel",
+                },
+            }
         if self.confidence == "not_found":
             return {
                 "confidence": "not_found",
@@ -293,6 +315,30 @@ class AiIntentPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(validation.allowed)
 
+    def test_contextual_comparison_is_grounded_by_prior_tool_evidence(self):
+        validation = AiGuardrailService().validate_output(
+            "Segundo a TACO, 200 g tÃªm mais calorias: 248 kcal, contra 148,8 kcal em 120 g.",
+            actor={"id": "user-1", "role": "nutritionist"},
+            context={"diets": [], "main_metrics": [], "variable_metrics": []},
+            agent_actions=[
+                {
+                    "tool": "compare_nutrition_evidence",
+                    "status": "executed",
+                    "success": True,
+                    "result": {
+                        "resolution": "exact",
+                        "source": {"name": "TACO"},
+                        "comparisons": [
+                            {"quantity_g": 120, "nutrients": {"energy_kcal": 148.8}},
+                            {"quantity_g": 200, "nutrients": {"energy_kcal": 248}},
+                        ],
+                    },
+                }
+            ],
+        )
+
+        self.assertTrue(validation.allowed, validation)
+
     async def test_missing_patient_weight_and_injury_are_reported_without_invention(self):
         workspace = EmptyPatientWorkspace()
         service = AiAgentService(workspace, SequencedNutritionAi([]))
@@ -437,6 +483,67 @@ class AiIntentPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(action["status"], "blocked")
         self.assertEqual(action["error_code"], "task_domain_mismatch")
         self.assertEqual(workspace.mutations, [])
+
+    async def test_completed_taco_task_answers_120g_and_200g_followups(self):
+        workspace = TacoPipelineWorkspace()
+        service = AiAgentService(workspace, SequencedNutritionAi([]))
+
+        first = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="Quantas calorias tem 150g de arroz integral cozido?",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000020"},
+        )
+        second = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="e se for 120g tem quantas calorias?",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000021"},
+        )
+        third = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="e 200g?",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000022"},
+        )
+        comparison = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="qual tem mais calorias?",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000023"},
+        )
+
+        self.assertEqual(first[0]["result"]["nutrients"]["energy_kcal"], 192)
+        self.assertEqual(second[0]["arguments"]["food_id"], first[0]["result"]["food"]["id"])
+        self.assertEqual(second[0]["arguments"]["quantity_g"], 120)
+        self.assertEqual(third[0]["arguments"]["quantity_g"], 200)
+        self.assertEqual(
+            [calculation[1] for calculation in workspace.calculations],
+            [150, 120, 200],
+        )
+        self.assertEqual(comparison[0]["tool"], "compare_nutrition_evidence")
+        self.assertEqual(
+            [item["quantity_g"] for item in comparison[0]["result"]["comparisons"]],
+            [150, 120, 200],
+        )
+        self.assertEqual(workspace.state["task_status"], "completed")
+        self.assertEqual(len(workspace.state["task_evidence"]["items"]), 4)
 
     async def test_concurrent_turn_in_same_conversation_is_blocked(self):
         workspace = TacoPipelineWorkspace()
