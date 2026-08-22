@@ -1,7 +1,5 @@
 import json
 import logging
-import re
-import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -475,12 +473,6 @@ async def _stream_chat_response(
                 yield _event("action", action)
 
             deterministic_answer = _answer_from_agent_actions(agent_actions)
-            if not deterministic_answer and _looks_like_write_request(payload.content):
-                deterministic_answer = (
-                    "Não foi possível concluir esta ação. Nenhuma operação foi executada "
-                    "no banco de dados, então nenhuma alteração foi salva."
-                )
-
             if deterministic_answer:
                 answer = deterministic_answer
             else:
@@ -766,52 +758,6 @@ def _answer_from_agent_actions(actions: list[dict]) -> str | None:
             lines.append(f"Não foi possível concluir esta ação. Motivo: {reason}")
 
     return "\n".join(line.strip() for line in lines if line).strip() or None
-
-
-def _looks_like_write_request(content: str) -> bool:
-    normalized = _normalize_text(content)
-    return any(
-        term in normalized
-        for term in (
-            "adicionar",
-            "adicione",
-            "alterar",
-            "altere",
-            "atualizar",
-            "atualize",
-            "cadastrar",
-            "cadastre",
-            "cancelar",
-            "cancele",
-            "corrigir",
-            "corrija",
-            "criar",
-            "crie",
-            "deletar",
-            "editar",
-            "edite",
-            "excluir",
-            "exclua",
-            "marcar",
-            "marque",
-            "mudar",
-            "mude",
-            "registrar",
-            "registre",
-            "remover",
-            "remova",
-            "salvar",
-            "salve",
-            "trocar",
-            "troque",
-        )
-    )
-
-
-def _normalize_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
-    return " ".join(re.sub(r"\s+", " ", ascii_value.lower()).split())
 
 
 def _debug_context_payload(context: dict) -> dict:

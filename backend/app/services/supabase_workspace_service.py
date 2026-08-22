@@ -1819,6 +1819,30 @@ class SupabaseWorkspaceService:
             )
         return result
 
+    async def replace_ai_training_plan(
+        self,
+        **payload: Any,
+    ) -> dict:
+        result = await self._request(
+            "POST",
+            "/rest/v1/rpc/replace_ai_training_plan",
+            json={
+                "p_nutritionist_id": payload["nutritionist_id"],
+                "p_patient_id": payload["patient_id"],
+                "p_title": payload["title"],
+                "p_objective": payload.get("objective"),
+                "p_restrictions": payload.get("restrictions") or [],
+                "p_observations": payload.get("observations"),
+                "p_days": payload["days"],
+            },
+        )
+        if not isinstance(result, dict) or not result.get("replaced"):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="O banco nao confirmou a substituicao atomica do treino.",
+            )
+        return result
+
     async def create_training_day_records(
         self,
         *,
@@ -1938,6 +1962,61 @@ class SupabaseWorkspaceService:
 
     async def find_similar_health_condition(
         self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict | None:
+        return await self._find_similar_health_condition_impl(*args, **kwargs)
+
+    async def get_workout_record(self, workout_id: str) -> dict:
+        return await self._get_row_by_id("workouts", workout_id)
+
+    async def update_workout_record(self, *, workout_id: str, payload: dict) -> dict:
+        rows = await self._request(
+            "PATCH", "/rest/v1/workouts",
+            params={"id": f"eq.{workout_id}", "select": "*"}, json=payload,
+            prefer="return=representation",
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Treino nao encontrado.")
+        return rows[0]
+
+    async def delete_workout_record(self, workout_id: str) -> None:
+        await self._request("DELETE", "/rest/v1/workouts", params={"id": f"eq.{workout_id}"})
+
+    async def get_workout_exercise_record(self, exercise_id: str) -> dict:
+        return await self._get_row_by_id("workout_exercises", exercise_id)
+
+    async def update_workout_exercise_record(self, *, exercise_id: str, payload: dict) -> dict:
+        rows = await self._request(
+            "PATCH", "/rest/v1/workout_exercises",
+            params={"id": f"eq.{exercise_id}", "select": "*"}, json=payload,
+            prefer="return=representation",
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Exercicio nao encontrado.")
+        return rows[0]
+
+    async def delete_workout_exercise_record(self, exercise_id: str) -> None:
+        await self._request("DELETE", "/rest/v1/workout_exercises", params={"id": f"eq.{exercise_id}"})
+
+    async def get_health_condition_record(self, condition_id: str) -> dict:
+        return await self._get_row_by_id("patient_health_conditions", condition_id)
+
+    async def update_health_condition_record(self, *, condition_id: str, payload: dict) -> dict:
+        rows = await self._request(
+            "PATCH", "/rest/v1/patient_health_conditions",
+            params={"id": f"eq.{condition_id}", "select": "*"}, json=payload,
+            prefer="return=representation",
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Condicao de saude nao encontrada.")
+        return rows[0]
+
+    async def delete_health_condition_record(self, condition_id: str) -> None:
+        await self._request("DELETE", "/rest/v1/patient_health_conditions", params={"id": f"eq.{condition_id}"})
+
+    async def _find_similar_health_condition_impl(
+        self,
         *,
         patient_id: str,
         condition_type: str,
@@ -2034,6 +2113,25 @@ class SupabaseWorkspaceService:
     async def get_diet_record(self, diet_id: str) -> dict:
         return await self._get_row_by_id("diets", diet_id)
 
+    async def delete_diet_record(self, diet_id: str) -> None:
+        await self._request("DELETE", "/rest/v1/diets", params={"id": f"eq.{diet_id}"})
+
+    async def get_diet_meal_record(self, meal_id: str) -> dict:
+        return await self._get_row_by_id("diet_meals", meal_id)
+
+    async def update_diet_meal_record(self, *, meal_id: str, payload: dict) -> dict:
+        rows = await self._request(
+            "PATCH", "/rest/v1/diet_meals",
+            params={"id": f"eq.{meal_id}", "select": "*"}, json=payload,
+            prefer="return=representation",
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Refeicao nao encontrada.")
+        return rows[0]
+
+    async def delete_diet_meal_record(self, meal_id: str) -> None:
+        await self._request("DELETE", "/rest/v1/diet_meals", params={"id": f"eq.{meal_id}"})
+
     async def create_diet_record(
         self,
         *,
@@ -2066,6 +2164,45 @@ class SupabaseWorkspaceService:
             prefer="return=representation",
         )
         return await self._get_row_by_id("diets", rows[0]["id"])
+
+    async def create_ai_diet_plan(
+        self,
+        *,
+        nutritionist_id: str,
+        patient_id: str,
+        title: str,
+        description: str | None,
+        calories: int | None,
+        protein: float | None,
+        carbs: float | None,
+        fats: float | None,
+        water_goal_ml: int | None,
+        is_active: bool,
+        meals: list[dict],
+    ) -> dict:
+        result = await self._request(
+            "POST",
+            "/rest/v1/rpc/create_ai_diet_plan",
+            json={
+                "p_nutritionist_id": nutritionist_id,
+                "p_patient_id": patient_id,
+                "p_title": title,
+                "p_description": description,
+                "p_calories": calories,
+                "p_protein": protein,
+                "p_carbs": carbs,
+                "p_fats": fats,
+                "p_water_goal_ml": water_goal_ml,
+                "p_is_active": is_active,
+                "p_meals": meals,
+            },
+        )
+        if not isinstance(result, dict) or not result.get("diet_id"):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="O banco nao confirmou a transacao do plano alimentar.",
+            )
+        return result
 
     async def update_diet_record(self, *, diet_id: str, payload: dict) -> dict:
         rows = await self._request(

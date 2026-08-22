@@ -20,11 +20,12 @@ class FakeAi:
 
     async def complete_with_tools(self, **kwargs):
         self.calls += 1
-        if not self.tool_name:
+        if not self.tool_name or self.calls > 1:
             return {}
         return {
             "tool_calls": [
                 {
+                    "id": f"call-{self.calls}",
                     "function": {
                         "name": self.tool_name,
                         "arguments": json.dumps(self.arguments),
@@ -71,6 +72,11 @@ class FakeWorkspace:
         if kwargs["nutritionist_id"] != NUTRITIONIST_ID:
             return []
         return [{"id": PATIENT_ID, "full_name": "Joao Silva"}]
+
+    async def get_patient_context_for_nutritionist(self, token, patient_id, **kwargs):
+        if patient_id != PATIENT_ID:
+            raise ValueError("Paciente fora do workspace profissional.")
+        return nutritionist_context()
 
     def _assert_scope(self, nutritionist_id, patient_id):
         if nutritionist_id != NUTRITIONIST_ID or patient_id != PATIENT_ID:
@@ -131,6 +137,10 @@ class FakeWorkspace:
             "exercises_count": exercise_count,
         }
 
+    async def replace_ai_training_plan(self, **kwargs):
+        result = await self.create_ai_training_plan(**kwargs)
+        return {**result, "replaced": True}
+
     async def create_training_day_records(self, training_plan_id, days):
         return [{"id": "day-1", "order_index": index} for index, _ in enumerate(days)]
 
@@ -165,6 +175,15 @@ class FakeWorkspace:
         self.mutations.append("create_diet")
         return {"id": "diet-new", **kwargs}
 
+    async def create_ai_diet_plan(self, **kwargs):
+        self._assert_scope(kwargs["nutritionist_id"], kwargs["patient_id"])
+        self.mutations.append("create_diet")
+        return {
+            "diet_id": "diet-new",
+            "meals_count": len(kwargs["meals"]),
+            "is_active": kwargs["is_active"],
+        }
+
     async def update_diet_record(self, **kwargs):
         self.mutations.append("update_diet")
         return {"id": kwargs["diet_id"], "patient_id": PATIENT_ID, "nutritionist_id": NUTRITIONIST_ID, **kwargs["payload"]}
@@ -179,6 +198,49 @@ class FakeWorkspace:
 
     async def update_diet_macro_totals(self, **kwargs):
         return {"id": kwargs["diet_id"], **kwargs["payload"]}
+
+    async def delete_diet_record(self, diet_id):
+        self.mutations.append("delete_diet")
+
+    async def get_diet_meal_record(self, meal_id):
+        return {"id": meal_id, "diet_id": "diet-1", "meal_name": "Almoco", "foods": []}
+
+    async def update_diet_meal_record(self, **kwargs):
+        self.mutations.append("update_diet_meal")
+        return {"id": kwargs["meal_id"], **kwargs["payload"]}
+
+    async def delete_diet_meal_record(self, meal_id):
+        self.mutations.append("delete_diet_meal")
+
+    async def get_workout_record(self, workout_id):
+        return {"id": workout_id, "patient_id": PATIENT_ID, "nutritionist_id": NUTRITIONIST_ID, "title": "Atual", "is_active": True}
+
+    async def update_workout_record(self, **kwargs):
+        self.mutations.append("update_workout")
+        return {"id": kwargs["workout_id"], "patient_id": PATIENT_ID, "nutritionist_id": NUTRITIONIST_ID, **kwargs["payload"]}
+
+    async def delete_workout_record(self, workout_id):
+        self.mutations.append("delete_workout")
+
+    async def get_workout_exercise_record(self, exercise_id):
+        return {"id": exercise_id, "workout_id": "workout-1", "exercise_name": "Agachamento"}
+
+    async def update_workout_exercise_record(self, **kwargs):
+        self.mutations.append("update_workout_exercise")
+        return {"id": kwargs["exercise_id"], "workout_id": "workout-1", **kwargs["payload"]}
+
+    async def delete_workout_exercise_record(self, exercise_id):
+        self.mutations.append("delete_workout_exercise")
+
+    async def get_health_condition_record(self, condition_id):
+        return {"id": condition_id, "patient_id": PATIENT_ID, "title": "Lesao"}
+
+    async def update_health_condition_record(self, **kwargs):
+        self.mutations.append("update_health_condition")
+        return {"id": kwargs["condition_id"], "patient_id": PATIENT_ID, **kwargs["payload"]}
+
+    async def delete_health_condition_record(self, condition_id):
+        self.mutations.append("delete_health_condition")
 
 
 def nutritionist_context():
@@ -278,9 +340,7 @@ class AiAgentPermissionTests(unittest.IsolatedAsyncioTestCase):
             user_message_record=self.message,
         )
 
-        self.assertEqual(actions[0]["tool"], "tool_orchestration")
-        self.assertEqual(actions[0]["status"], "failed")
-        self.assertFalse(actions[0]["success"])
+        self.assertEqual(actions, [])
         self.assertEqual(workspace.mutations, [])
 
     async def test_06_authorized_patient_scope_is_used(self):

@@ -116,6 +116,7 @@ class OpenAIChatService:
         user_message: str,
         forced_tool: str | None = None,
         max_completion_tokens: int | None = None,
+        messages: list[dict[str, Any]] | None = None,
     ) -> dict:
         generation = GENERATION_SETTINGS.get(
             reasoning_level,
@@ -123,7 +124,7 @@ class OpenAIChatService:
         )
         payload = {
             "model": self.model,
-            "messages": [
+            "messages": messages or [
                 {"role": "developer", "content": system_prompt},
                 *history,
                 {"role": "user", "content": user_message},
@@ -134,6 +135,7 @@ class OpenAIChatService:
                 if forced_tool
                 else "auto"
             ),
+            "parallel_tool_calls": False,
             "max_completion_tokens": (
                 max_completion_tokens
                 if max_completion_tokens is not None
