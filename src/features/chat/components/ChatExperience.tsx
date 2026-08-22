@@ -1049,17 +1049,22 @@ function AgentActionList({ actions }: { actions: AgentAction[] }) {
             <Icon className="mt-0.5 shrink-0" size={15} />
             <div className="min-w-0">
               <p className="font-black">{action.label ?? 'Ação realizada'}</p>
-              {(action.summary || action.error) && (
-                <p className="mt-0.5 text-[11px] leading-5 opacity-80">
-                  {action.summary || action.error}
-                </p>
-              )}
+              <p className="mt-0.5 text-[11px] leading-5 opacity-80">
+                {actionStatusLabel(status)}
+              </p>
             </div>
           </div>
         )
       })}
     </div>
   )
+}
+
+function actionStatusLabel(status: AgentAction['status']) {
+  if (status === 'executed') return 'Confirmado pelo sistema'
+  if (status === 'pending_confirmation') return 'Aguardando sua confirmação'
+  if (status === 'failed') return 'Não concluído'
+  return 'Não executado'
 }
 
 function getAgentActions(metadata: ChatMessageRecord['metadata']): AgentAction[] {
