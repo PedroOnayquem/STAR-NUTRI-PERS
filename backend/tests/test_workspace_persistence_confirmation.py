@@ -94,6 +94,32 @@ class WorkspacePersistenceConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][0:2], ("POST", "/rest/v1/rpc/create_ai_training_plan"))
 
+    async def test_pending_action_upsert_targets_conversation_user_key(self):
+        calls = []
+
+        async def request(method, path, **kwargs):
+            calls.append((method, path, kwargs))
+            return [{"id": "state-1"}]
+
+        self.service._request = request
+        state = await self.service.upsert_ai_conversation_state(
+            {
+                "conversation_id": "chat-1",
+                "user_id": "user-1",
+                "pending_action": "replace_training_plan",
+            }
+        )
+
+        self.assertEqual(state["id"], "state-1")
+        self.assertEqual(
+            calls[0][2]["params"],
+            {"on_conflict": "conversation_id,user_id"},
+        )
+        self.assertEqual(
+            calls[0][2]["prefer"],
+            "resolution=merge-duplicates,return=representation",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

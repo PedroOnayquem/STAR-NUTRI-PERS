@@ -1702,6 +1702,7 @@ class SupabaseWorkspaceService:
         rows = await self._request(
             "POST",
             "/rest/v1/ai_conversation_state",
+            params={"on_conflict": "conversation_id,user_id"},
             json=payload,
             prefer="resolution=merge-duplicates,return=representation",
         )
