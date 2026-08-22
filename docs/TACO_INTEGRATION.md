@@ -46,7 +46,7 @@ Fonte: TACO, 4ª edição ampliada e revisada (2011)
 
 ## IA
 
-A IA recebe apenas os candidatos ou o alimento consultado por meio de `search_taco_foods`, `get_taco_food`, `calculate_taco_food_nutrients` e `add_taco_food_to_meal`. Uma busca ampla, como “arroz”, retorna opções e exige esclarecimento. Um nome exato ou um `food_id` resolve o item. Se não houver correspondência, a ferramenta informa ausência; o modelo não deve inventar composição nem substituir automaticamente por alimento “similar”. Os nutrientes detalhados são carregados somente para o alimento escolhido.
+A IA recebe apenas os candidatos ou o alimento consultado por meio de `resolve_taco_nutrition`, `search_taco_foods`, `get_taco_food`, `calculate_taco_food_nutrients` e `add_taco_food_to_meal`. `resolve_taco_nutrition` é a opção preferencial para perguntas em linguagem natural: classifica a correspondência, calcula a quantidade no RPC e devolve evidência estruturada. Uma busca ampla, como “arroz”, retorna opções e exige esclarecimento. Um nome exato ou um `food_id` resolve o item. Se não houver correspondência, a ferramenta informa ausência; o modelo não deve inventar composição nem substituir automaticamente por alimento “similar”. Os nutrientes detalhados são carregados somente para o alimento escolhido.
 
 ## Importação
 

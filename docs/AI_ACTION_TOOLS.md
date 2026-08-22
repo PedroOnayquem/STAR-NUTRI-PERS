@@ -39,7 +39,7 @@ No chat profissional geral, leituras por nome são filtradas pelo `nutritionist_
 | Perfil/evolução | `update_patient_profile`, `update_patient_birth_date`, `register_weight_change`, `register_progress` |
 | Condições | `register_injury`, `add_observation` |
 | Dieta | `create_diet_plan`, `update_diet_plan`, `add_food_to_meal`, `add_taco_food_to_meal` |
-| TACO | `search_taco_foods`, `get_taco_food`, `calculate_taco_food_nutrients` |
+| TACO | `resolve_taco_nutrition`, `search_taco_foods`, `get_taco_food`, `calculate_taco_food_nutrients` |
 | Treino | `create_training_plan`, `add_workout_observation` |
 | Agenda | `create_appointment`, `create_patient_appointment` |
 | Controle | `request_confirmation` |
