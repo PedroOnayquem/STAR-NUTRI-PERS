@@ -17,7 +17,10 @@
     "docker:up": "docker compose up --build",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "taco:import": "node --require ./scripts/node-userinfo-shim.cjs --import tsx scripts/import-taco.ts",
+    "taco:validate": "node --require ./scripts/node-userinfo-shim.cjs --import tsx scripts/import-taco.ts --dry-run",
+    "test:taco": "node --require ./scripts/node-userinfo-shim.cjs --import tsx --test scripts/import-taco.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

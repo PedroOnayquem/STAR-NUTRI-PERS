@@ -1,7 +1,22 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createHash } from 'node:crypto'
+import * as fs from 'node:fs'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import * as XLSX from 'xlsx'
+
+XLSX.set_fs(fs)
+
+export const TACO_SOURCE = {
+  edition: '4ª edição ampliada e revisada',
+  fileName: 'Taco-4a-Edicao.xlsx',
+  name: 'TACO',
+  publicationYear: 2011,
+  referenceBasis: '100 g de parte comestível',
+  referenceQuantityG: 100,
+  url: 'https://nepa.unicamp.br/wp-content/uploads/sites/27/2023/10/Taco-4a-Edicao.xlsx',
+} as const
 
 type TacoFoodInput = {
   ash_g: number | null
@@ -9,7 +24,7 @@ type TacoFoodInput = {
   carbohydrate_g: number | null
   category: string | null
   cholesterol_mg: number | null
-  code: string | null
+  code: string
   copper_mg: number | null
   energy_kcal: number | null
   energy_kj: number | null
@@ -25,460 +40,318 @@ type TacoFoodInput = {
   phosphorus_mg: number | null
   potassium_mg: number | null
   protein_g: number | null
+  publication_year: number
   pyridoxine_mg: number | null
   rae_mcg: number | null
   re_mcg: number | null
+  reference_basis: string
+  reference_quantity_g: number
   retinol_mcg: number | null
   riboflavin_mg: number | null
   search_name: string
   sodium_mg: number | null
-  source: 'TACO'
+  source: string
+  source_edition: string
+  source_key: string
+  source_url: string
   thiamine_mg: number | null
   vitamin_c_mg: number | null
   zinc_mg: number | null
 }
 
-type TacoMappedField = keyof Omit<TacoFoodInput, 'normalized_name' | 'search_name' | 'source'>
-type HeaderIndex = Record<TacoMappedField, number | null>
-type TabularSource = {
-  rows: string[][]
-  sourceName: string
+type NutrientDefinition = { code: string; column: number; name: string; unit: string }
+
+export type TacoNutrientInput = {
+  amount: number | null
+  nutrient_code: string
+  nutrient_name: string
+  source_key: string
+  source_sheet: string
+  source_value: string | null
+  unit: string
+  value_status: 'measured' | 'trace' | 'not_applicable' | 'not_analyzed' | 'missing'
 }
-type ParsedFoods = {
-  duplicateRows: number
-  foods: TacoFoodInput[]
-  ignoredRows: number
-  sourceCount: number
-}
-type UpsertSummary = {
-  inserted: number
-  updated: number
-}
+
+export type ParsedTacoWorkbook = { foods: TacoFoodInput[]; nutrients: TacoNutrientInput[] }
 
 const DEFAULT_INPUTS = [
-  'src/data/taco/taco.csv',
-  'src/data/taco/taco.xlsx',
-  'src/data/taco/taco.xls',
+  'data/taco/Taco-4a-Edicao.xlsx',
+  'data/taco/taco.xlsx',
+  'data/taco/taco.xls',
 ]
 const BATCH_SIZE = 250
-const SUPPORTED_EXTENSIONS = new Set(['.csv', '.xls', '.xlsx'])
-const CORE_NUTRIENT_FIELDS: TacoMappedField[] = [
-  'energy_kcal',
-  'protein_g',
-  'carbohydrate_g',
-  'lipid_g',
+const SUPPORTED_EXTENSIONS = new Set(['.xls', '.xlsx'])
+
+const CORE_NUTRIENTS: NutrientDefinition[] = [
+  { code: 'moisture_g', column: 2, name: 'Umidade', unit: 'g' },
+  { code: 'energy_kcal', column: 3, name: 'Energia', unit: 'kcal' },
+  { code: 'energy_kj', column: 4, name: 'Energia', unit: 'kJ' },
+  { code: 'protein_g', column: 5, name: 'Proteína', unit: 'g' },
+  { code: 'lipid_g', column: 6, name: 'Lipídeos', unit: 'g' },
+  { code: 'cholesterol_mg', column: 7, name: 'Colesterol', unit: 'mg' },
+  { code: 'carbohydrate_g', column: 8, name: 'Carboidrato', unit: 'g' },
+  { code: 'fiber_g', column: 9, name: 'Fibra alimentar', unit: 'g' },
+  { code: 'ash_g', column: 10, name: 'Cinzas', unit: 'g' },
+  { code: 'calcium_mg', column: 11, name: 'Cálcio', unit: 'mg' },
+  { code: 'magnesium_mg', column: 12, name: 'Magnésio', unit: 'mg' },
+  { code: 'manganese_mg', column: 14, name: 'Manganês', unit: 'mg' },
+  { code: 'phosphorus_mg', column: 15, name: 'Fósforo', unit: 'mg' },
+  { code: 'iron_mg', column: 16, name: 'Ferro', unit: 'mg' },
+  { code: 'sodium_mg', column: 17, name: 'Sódio', unit: 'mg' },
+  { code: 'potassium_mg', column: 18, name: 'Potássio', unit: 'mg' },
+  { code: 'copper_mg', column: 19, name: 'Cobre', unit: 'mg' },
+  { code: 'zinc_mg', column: 20, name: 'Zinco', unit: 'mg' },
+  { code: 'retinol_mcg', column: 21, name: 'Retinol', unit: 'mcg' },
+  { code: 're_mcg', column: 22, name: 'RE', unit: 'mcg' },
+  { code: 'rae_mcg', column: 23, name: 'RAE', unit: 'mcg' },
+  { code: 'thiamine_mg', column: 24, name: 'Tiamina', unit: 'mg' },
+  { code: 'riboflavin_mg', column: 25, name: 'Riboflavina', unit: 'mg' },
+  { code: 'pyridoxine_mg', column: 26, name: 'Piridoxina', unit: 'mg' },
+  { code: 'niacin_mg', column: 27, name: 'Niacina', unit: 'mg' },
+  { code: 'vitamin_c_mg', column: 28, name: 'Vitamina C', unit: 'mg' },
 ]
 
-const FIELD_ALIASES: Record<TacoMappedField, string[]> = {
-  ash_g: ['cinzas', 'ash'],
-  calcium_mg: ['calcio', 'calcium'],
-  carbohydrate_g: ['carboidrato', 'carboidratos', 'carbohydrate', 'cho'],
-  category: ['categoria', 'grupo', 'group'],
-  cholesterol_mg: ['colesterol', 'cholesterol'],
-  code: ['codigo', 'cod', 'code', 'numero do alimento', 'n do alimento'],
-  copper_mg: ['cobre', 'copper'],
-  energy_kcal: ['energia kcal', 'kcal', 'calorias', 'energy kcal'],
-  energy_kj: ['energia kj', 'kj', 'energy kj'],
-  fiber_g: ['fibra alimentar', 'fibra', 'fiber'],
-  iron_mg: ['ferro', 'iron'],
-  lipid_g: ['lipideos', 'lipidios', 'gordura', 'gorduras', 'lipids', 'fat'],
-  magnesium_mg: ['magnesio', 'magnesium'],
-  manganese_mg: ['manganes', 'manganese'],
-  moisture_g: ['umidade', 'moisture'],
-  name: ['descricao dos alimentos', 'descrição dos alimentos', 'alimento', 'nome', 'description', 'food'],
-  niacin_mg: ['niacina', 'niacin'],
-  phosphorus_mg: ['fosforo', 'phosphorus'],
-  potassium_mg: ['potassio', 'potassium'],
-  protein_g: ['proteina', 'proteinas', 'protein'],
-  pyridoxine_mg: ['piridoxina', 'vitamina b6', 'pyridoxine'],
-  rae_mcg: ['rae'],
-  re_mcg: ['re'],
-  retinol_mcg: ['retinol'],
-  riboflavin_mg: ['riboflavina', 'vitamina b2', 'riboflavin'],
-  sodium_mg: ['sodio', 'sodium'],
-  thiamine_mg: ['tiamina', 'vitamina b1', 'thiamine'],
-  vitamin_c_mg: ['vitamina c', 'ascorbico', 'ascorbic'],
-  zinc_mg: ['zinco', 'zinc'],
+const FATTY_ACIDS: NutrientDefinition[] = [
+  { code: 'saturated_fat_g', column: 2, name: 'Ácidos graxos saturados', unit: 'g' },
+  { code: 'monounsaturated_fat_g', column: 3, name: 'Ácidos graxos monoinsaturados', unit: 'g' },
+  { code: 'polyunsaturated_fat_g', column: 4, name: 'Ácidos graxos poli-insaturados', unit: 'g' },
+  ...[
+    ['fatty_acid_12_0_g', 5, '12:0'], ['fatty_acid_14_0_g', 6, '14:0'],
+    ['fatty_acid_16_0_g', 7, '16:0'], ['fatty_acid_18_0_g', 8, '18:0'],
+    ['fatty_acid_20_0_g', 9, '20:0'], ['fatty_acid_22_0_g', 10, '22:0'],
+    ['fatty_acid_24_0_g', 11, '24:0'], ['fatty_acid_14_1_g', 13, '14:1'],
+    ['fatty_acid_16_1_g', 14, '16:1'], ['fatty_acid_18_1_g', 15, '18:1'],
+    ['fatty_acid_20_1_g', 16, '20:1'], ['fatty_acid_18_2_n6_g', 17, '18:2 n-6'],
+    ['fatty_acid_18_3_n3_g', 18, '18:3 n-3'], ['fatty_acid_20_4_g', 19, '20:4'],
+    ['fatty_acid_20_5_g', 20, '20:5'], ['fatty_acid_22_5_g', 21, '22:5'],
+    ['fatty_acid_22_6_g', 22, '22:6'], ['fatty_acid_18_1t_g', 23, '18:1 trans'],
+    ['fatty_acid_18_2t_g', 24, '18:2 trans'],
+  ].map(([code, column, name]) => ({ code: String(code), column: Number(column), name: String(name), unit: 'g' })),
+]
+
+const AMINO_ACIDS: NutrientDefinition[] = [
+  ...[
+    ['tryptophan_g', 2, 'Triptofano'], ['threonine_g', 3, 'Treonina'],
+    ['isoleucine_g', 4, 'Isoleucina'], ['leucine_g', 5, 'Leucina'],
+    ['lysine_g', 6, 'Lisina'], ['methionine_g', 7, 'Metionina'],
+    ['cystine_g', 8, 'Cistina'], ['phenylalanine_g', 9, 'Fenilalanina'],
+    ['tyrosine_g', 10, 'Tirosina'], ['valine_g', 12, 'Valina'],
+    ['arginine_g', 13, 'Arginina'], ['histidine_g', 14, 'Histidina'],
+    ['alanine_g', 15, 'Alanina'], ['aspartic_acid_g', 16, 'Ácido aspártico'],
+    ['glutamic_acid_g', 17, 'Ácido glutâmico'], ['glycine_g', 18, 'Glicina'],
+    ['proline_g', 19, 'Prolina'], ['serine_g', 20, 'Serina'],
+  ].map(([code, column, name]) => ({ code: String(code), column: Number(column), name: String(name), unit: 'g' })),
+]
+
+export function parseOfficialTacoWorkbook(inputPath: string): ParsedTacoWorkbook {
+  const workbook = XLSX.readFile(inputPath, { cellDates: false, raw: false })
+  const mainSheetName = workbook.SheetNames.find((name) => normalizeSearchText(name).startsWith('cmvcol'))
+  const fattySheetName = workbook.SheetNames.find((name) => normalizeSearchText(name).startsWith('agtaco'))
+  const aminoSheetName = workbook.SheetNames.find((name) => normalizeSearchText(name).startsWith('aminoacidos'))
+  if (!mainSheetName || !fattySheetName || !aminoSheetName) {
+    throw new Error('A planilha não possui as três abas oficiais esperadas da TACO 4ª edição.')
+  }
+
+  const foods: TacoFoodInput[] = []
+  const nutrients: TacoNutrientInput[] = []
+  let category: string | null = null
+  for (const row of sheetRows(workbook, mainSheetName)) {
+    const code = foodCode(row[0])
+    const name = cleanText(row[1])
+    if (!code || !name) {
+      if (isCategoryRow(row)) category = cleanText(row[0])
+      continue
+    }
+    const normalizedName = normalizeSearchText(name)
+    const values = Object.fromEntries(CORE_NUTRIENTS.map((item) => [item.code, numericValue(row[item.column])]))
+    const sourceKey = `${TACO_SOURCE.name}:${TACO_SOURCE.publicationYear}:${code}`
+    foods.push({
+      ...values,
+      category,
+      code,
+      name,
+      normalized_name: normalizedName,
+      publication_year: TACO_SOURCE.publicationYear,
+      reference_basis: TACO_SOURCE.referenceBasis,
+      reference_quantity_g: TACO_SOURCE.referenceQuantityG,
+      search_name: normalizedName,
+      source: TACO_SOURCE.name,
+      source_edition: TACO_SOURCE.edition,
+      source_key: sourceKey,
+      source_url: TACO_SOURCE.url,
+    } as TacoFoodInput)
+    nutrients.push(...nutrientsFromRow(row, sourceKey, mainSheetName, CORE_NUTRIENTS))
+  }
+
+  const foodKeys = new Set(foods.map((food) => food.source_key))
+  nutrients.push(...parseAdditionalSheet(workbook, fattySheetName, FATTY_ACIDS, foodKeys))
+  nutrients.push(...parseAdditionalSheet(workbook, aminoSheetName, AMINO_ACIDS, foodKeys))
+  if (foods.length !== 597) {
+    throw new Error(`A planilha oficial deveria conter 597 alimentos; foram encontrados ${foods.length}.`)
+  }
+  return { foods, nutrients }
 }
 
-loadDotEnv('.env')
-loadDotEnv('backend/.env')
-
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error)
-  process.exit(1)
-})
-
 async function main() {
-  const inputPath = resolveInputPath(process.argv[2])
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
-  const serviceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+  const { dryRun, inputPath } = parseArguments(process.argv.slice(2))
+  const parsed = parseOfficialTacoWorkbook(inputPath)
+  const checksum = createHash('sha256').update(readFileSync(inputPath)).digest('hex')
+  if (dryRun) {
+    printSummary(inputPath, checksum, parsed, 'Validação concluída; nenhuma escrita foi realizada.')
+    return
+  }
 
+  loadDotEnv('.env')
+  loadDotEnv('backend/.env')
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error('Defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY antes de importar a TACO.')
   }
 
-  const sources = readTabularSources(inputPath)
-  const parsed = parseFoods(sources)
-
-  if (!parsed.foods.length) {
-    throw new Error('Nenhum alimento válido foi encontrado no arquivo TACO.')
-  }
-
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false },
-  })
-  const withCode = parsed.foods.filter((food) => food.code)
-  const withoutCode = parsed.foods.filter((food) => !food.code)
-
-  const codeSummary = await upsertFoodsByKey(supabase, withCode, 'code')
-  const nameSummary = await upsertFoodsByKey(supabase, withoutCode, 'normalized_name')
-  const insertedOrUpdated =
-    codeSummary.inserted + codeSummary.updated + nameSummary.inserted + nameSummary.updated
-
-  console.log('Importação concluída.')
-  console.log(`Arquivo: ${inputPath}`)
-  console.log(`Fontes lidas: ${parsed.sourceCount}`)
-  console.log(`Alimentos processados: ${parsed.foods.length}`)
-  console.log(`Inseridos/atualizados: ${insertedOrUpdated}`)
-  console.log(`Ignorados: ${parsed.ignoredRows + parsed.duplicateRows}`)
-  console.log('Erros: 0')
+  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } })
+  const batchId = await upsertImportBatch(supabase, checksum)
+  await upsertFoods(supabase, parsed.foods, batchId)
+  const ids = await loadFoodIds(supabase, parsed.foods.map((food) => food.source_key))
+  await upsertNutrients(supabase, parsed.nutrients, ids)
+  const { error } = await supabase.from('taco_import_batches').update({
+    food_count: parsed.foods.length,
+    imported_at: new Date().toISOString(),
+    nutrient_value_count: parsed.nutrients.length,
+  }).eq('id', batchId)
+  if (error) throw new Error(`Falha ao finalizar lote TACO: ${error.message}`)
+  printSummary(inputPath, checksum, parsed, 'Importação concluída.')
 }
 
-function resolveInputPath(inputArg: string | undefined) {
-  if (inputArg) {
-    const inputPath = resolve(inputArg)
-    assertSupportedFile(inputPath)
-    if (!existsSync(inputPath)) {
-      throw new Error(`Arquivo TACO não encontrado em ${inputPath}.`)
-    }
-    return inputPath
+function parseAdditionalSheet(
+  workbook: XLSX.WorkBook,
+  sheetName: string,
+  definitions: NutrientDefinition[],
+  foodKeys: Set<string>,
+) {
+  const result: TacoNutrientInput[] = []
+  for (const row of sheetRows(workbook, sheetName)) {
+    const code = foodCode(row[0])
+    if (!code || !cleanText(row[1])) continue
+    const sourceKey = `${TACO_SOURCE.name}:${TACO_SOURCE.publicationYear}:${code}`
+    if (foodKeys.has(sourceKey)) result.push(...nutrientsFromRow(row, sourceKey, sheetName, definitions))
   }
-
-  const found = DEFAULT_INPUTS.map((path) => resolve(path)).find((path) => existsSync(path))
-  if (!found) {
-    throw new Error(
-      'Nenhum arquivo TACO encontrado. Coloque taco.csv, taco.xls ou taco.xlsx em src/data/taco/',
-    )
-  }
-  assertSupportedFile(found)
-  return found
+  return result
 }
 
-function assertSupportedFile(inputPath: string) {
-  const extension = extname(inputPath).toLowerCase()
-  if (!SUPPORTED_EXTENSIONS.has(extension)) {
-    throw new Error(`Formato TACO não suportado: ${extension || 'sem extensão'}. Use CSV, XLS ou XLSX.`)
-  }
-}
-
-function readTabularSources(inputPath: string): TabularSource[] {
-  const extension = extname(inputPath).toLowerCase()
-  if (extension === '.csv') {
-    return [{ rows: parseCsv(readFileSync(inputPath, 'utf8')), sourceName: inputPath }]
-  }
-
-  const workbook = XLSX.readFile(inputPath, {
-    cellDates: false,
-    raw: false,
-  })
-
-  return workbook.SheetNames.map((sheetName) => {
-    const worksheet = workbook.Sheets[sheetName]
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-      blankrows: false,
-      defval: '',
-      header: 1,
-      raw: false,
-    })
-
+function nutrientsFromRow(
+  row: string[], sourceKey: string, sourceSheet: string, definitions: NutrientDefinition[],
+) {
+  return definitions.map<TacoNutrientInput>((definition) => {
+    const sourceValue = cleanText(row[definition.column])
     return {
-      rows: rows.map((row) => row.map(cellText)),
-      sourceName: sheetName,
+      amount: numericValue(sourceValue),
+      nutrient_code: definition.code,
+      nutrient_name: definition.name,
+      source_key: sourceKey,
+      source_sheet: sourceSheet,
+      source_value: sourceValue,
+      unit: definition.unit,
+      value_status: valueStatus(sourceValue),
     }
-  }).filter((source) => source.rows.some((row) => row.some((cell) => cell.trim())))
+  })
 }
 
-function parseFoods(sources: TabularSource[]): ParsedFoods {
-  const allFoods: TacoFoodInput[] = []
-  let ignoredRows = 0
-  let sourcesWithHeader = 0
-
-  for (const source of sources) {
-    const header = findHeader(source.rows)
-    if (!header) continue
-
-    sourcesWithHeader += 1
-    for (const row of source.rows.slice(header.dataStartIndex)) {
-      const food = mapRecord(row, header.headerIndex, source.sourceName)
-      if (food) allFoods.push(food)
-      else if (row.some((cell) => cell.trim())) ignoredRows += 1
-    }
-  }
-
-  if (!sourcesWithHeader) {
-    throw new Error(
-      'Não encontrei colunas mínimas no arquivo TACO. É necessário haver coluna de nome e ao menos uma coluna de energia, proteína, carboidrato ou gordura.',
-    )
-  }
-
-  const deduped = dedupeFoods(allFoods)
-  return {
-    duplicateRows: deduped.duplicateRows,
-    foods: deduped.foods,
-    ignoredRows,
-    sourceCount: sourcesWithHeader,
-  }
+async function upsertImportBatch(supabase: SupabaseClient, checksum: string) {
+  const { data, error } = await supabase.from('taco_import_batches').upsert({
+    publication_year: TACO_SOURCE.publicationYear,
+    reference_basis: TACO_SOURCE.referenceBasis,
+    source_edition: TACO_SOURCE.edition,
+    source_file_name: TACO_SOURCE.fileName,
+    source_file_sha256: checksum,
+    source_name: TACO_SOURCE.name,
+    source_url: TACO_SOURCE.url,
+  }, { onConflict: 'source_name,source_edition,source_file_sha256' }).select('id').single<{ id: string }>()
+  if (error) throw new Error(`Falha ao registrar origem TACO: ${error.message}`)
+  return data.id
 }
 
-function findHeader(rows: string[][]) {
-  let best:
-    | {
-        dataStartIndex: number
-        headerIndex: HeaderIndex
-        score: number
-      }
-    | null = null
-
-  const maxRowsToScan = Math.min(rows.length, 40)
-  for (let rowIndex = 0; rowIndex < maxRowsToScan; rowIndex += 1) {
-    for (const useNextRow of [false, true]) {
-      if (useNextRow && rowIndex + 1 >= rows.length) continue
-
-      const headers = useNextRow
-        ? combineHeaderRows(rows[rowIndex], rows[rowIndex + 1])
-        : rows[rowIndex]
-      const headerIndex = buildHeaderIndex(headers)
-      const coreCount = CORE_NUTRIENT_FIELDS.filter((field) => headerIndex[field] !== null).length
-      const mappedCount = Object.values(headerIndex).filter((index) => index !== null).length
-      const score = (headerIndex.name !== null ? 100 : 0) + coreCount * 20 + mappedCount
-
-      if (headerIndex.name === null || coreCount === 0) continue
-      if (!best || score > best.score) {
-        best = {
-          dataStartIndex: rowIndex + (useNextRow ? 2 : 1),
-          headerIndex,
-          score,
-        }
-      }
-    }
-  }
-
-  return best
-}
-
-function combineHeaderRows(first: string[], second: string[]) {
-  const width = Math.max(first.length, second.length)
-  return Array.from({ length: width }, (_, index) =>
-    cleanText([first[index], second[index]].filter(Boolean).join(' ')) ?? '',
-  )
-}
-
-function buildHeaderIndex(headers: string[]): HeaderIndex {
-  const normalizedHeaders = headers.map(normalizeSearchText)
-  return Object.fromEntries(
-    Object.entries(FIELD_ALIASES).map(([field, aliases]) => {
-      let bestIndex: number | null = null
-      let bestScore = 0
-
-      normalizedHeaders.forEach((header, index) => {
-        for (const alias of aliases) {
-          const score = headerMatchScore(header, normalizeSearchText(alias))
-          if (score > bestScore) {
-            bestIndex = index
-            bestScore = score
-          }
-        }
-      })
-
-      return [field, bestIndex]
-    }),
-  ) as HeaderIndex
-}
-
-function headerMatchScore(header: string, alias: string) {
-  if (!header || !alias) return 0
-  if (header === alias) return 100
-  if (header.includes(alias)) return 80
-
-  const headerTokens = new Set(header.split(' '))
-  const aliasTokens = alias.split(' ')
-  if (aliasTokens.every((token) => headerTokens.has(token))) return 60
-  return 0
-}
-
-function mapRecord(
-  record: string[],
-  headerIndex: HeaderIndex,
-  sourceName: string,
-): TacoFoodInput | null {
-  const name = cleanText(read(record, headerIndex.name))
-  if (!name) return null
-
-  const normalizedName = normalizeSearchText(name)
-  if (!normalizedName) return null
-
-  const food: TacoFoodInput = {
-    ash_g: numberValue(read(record, headerIndex.ash_g)),
-    calcium_mg: numberValue(read(record, headerIndex.calcium_mg)),
-    carbohydrate_g: numberValue(read(record, headerIndex.carbohydrate_g)),
-    category: cleanText(read(record, headerIndex.category)) || fallbackCategory(sourceName),
-    cholesterol_mg: numberValue(read(record, headerIndex.cholesterol_mg)),
-    code: cleanCode(read(record, headerIndex.code)),
-    copper_mg: numberValue(read(record, headerIndex.copper_mg)),
-    energy_kcal: numberValue(read(record, headerIndex.energy_kcal)),
-    energy_kj: numberValue(read(record, headerIndex.energy_kj)),
-    fiber_g: numberValue(read(record, headerIndex.fiber_g)),
-    iron_mg: numberValue(read(record, headerIndex.iron_mg)),
-    lipid_g: numberValue(read(record, headerIndex.lipid_g)),
-    magnesium_mg: numberValue(read(record, headerIndex.magnesium_mg)),
-    manganese_mg: numberValue(read(record, headerIndex.manganese_mg)),
-    moisture_g: numberValue(read(record, headerIndex.moisture_g)),
-    name,
-    niacin_mg: numberValue(read(record, headerIndex.niacin_mg)),
-    normalized_name: normalizedName,
-    phosphorus_mg: numberValue(read(record, headerIndex.phosphorus_mg)),
-    potassium_mg: numberValue(read(record, headerIndex.potassium_mg)),
-    protein_g: numberValue(read(record, headerIndex.protein_g)),
-    pyridoxine_mg: numberValue(read(record, headerIndex.pyridoxine_mg)),
-    rae_mcg: numberValue(read(record, headerIndex.rae_mcg)),
-    re_mcg: numberValue(read(record, headerIndex.re_mcg)),
-    retinol_mcg: numberValue(read(record, headerIndex.retinol_mcg)),
-    riboflavin_mg: numberValue(read(record, headerIndex.riboflavin_mg)),
-    search_name: normalizedName,
-    sodium_mg: numberValue(read(record, headerIndex.sodium_mg)),
-    source: 'TACO',
-    thiamine_mg: numberValue(read(record, headerIndex.thiamine_mg)),
-    vitamin_c_mg: numberValue(read(record, headerIndex.vitamin_c_mg)),
-    zinc_mg: numberValue(read(record, headerIndex.zinc_mg)),
-  }
-
-  const hasNutritionValue = CORE_NUTRIENT_FIELDS.some((field) => food[field] !== null)
-  return hasNutritionValue ? food : null
-}
-
-function dedupeFoods(foods: TacoFoodInput[]) {
-  const byKey = new Map<string, TacoFoodInput>()
-  let duplicateRows = 0
-
-  for (const food of foods) {
-    const key = food.code ? `code:${food.code}` : `name:${food.normalized_name}`
-    if (byKey.has(key)) duplicateRows += 1
-    byKey.set(key, food)
-  }
-
-  return {
-    duplicateRows,
-    foods: Array.from(byKey.values()),
-  }
-}
-
-async function upsertFoodsByKey(
-  supabase: SupabaseClient,
-  foods: TacoFoodInput[],
-  keyField: 'code' | 'normalized_name',
-): Promise<UpsertSummary> {
-  const summary = { inserted: 0, updated: 0 }
-  if (!foods.length) return summary
-
+async function upsertFoods(supabase: SupabaseClient, foods: TacoFoodInput[], batchId: string) {
   for (const batch of chunks(foods, BATCH_SIZE)) {
-    const keys = batch.map((food) => food[keyField]).filter((key): key is string => Boolean(key))
-    const { data: existingRows, error: lookupError } = await supabase
-      .from('taco_foods')
-      .select(`id,${keyField}`)
-      .in(keyField, keys)
-
-    if (lookupError) {
-      throw new Error(`Falha ao buscar alimentos existentes por ${keyField}: ${lookupError.message}`)
-    }
-
-    const existingByKey = new Map(
-      ((existingRows ?? []) as Array<Record<string, unknown>>).map((row) => [
-        String(row[keyField]),
-        String(row.id),
-      ]),
+    const { error } = await supabase.from('taco_foods').upsert(
+      batch.map((food) => ({ ...food, import_batch_id: batchId })),
+      { onConflict: 'source_key' },
     )
-    const inserts: TacoFoodInput[] = []
-    const updates: Array<{ food: TacoFoodInput; id: string }> = []
-
-    for (const food of batch) {
-      const existingId = existingByKey.get(food[keyField] ?? '')
-      if (existingId) updates.push({ food, id: existingId })
-      else inserts.push(food)
-    }
-
-    if (inserts.length) {
-      const { error } = await supabase.from('taco_foods').insert(inserts)
-      if (error) throw new Error(`Falha ao inserir alimentos TACO: ${error.message}`)
-      summary.inserted += inserts.length
-    }
-
-    for (const { food, id } of updates) {
-      const { error } = await supabase.from('taco_foods').update(food).eq('id', id)
-      if (error) throw new Error(`Falha ao atualizar ${food.name}: ${error.message}`)
-      summary.updated += 1
-    }
+    if (error) throw new Error(`Falha ao importar alimentos TACO: ${error.message}`)
   }
-
-  return summary
 }
 
-function parseCsv(input: string) {
-  const normalized = input.replace(/^\uFEFF/, '')
-  const firstLine = normalized.split(/\r?\n/, 1)[0] ?? ''
-  const delimiter = firstLine.includes(';') ? ';' : ','
-  const rows: string[][] = []
-  let current = ''
-  let row: string[] = []
-  let quoted = false
-
-  for (let index = 0; index < normalized.length; index += 1) {
-    const char = normalized[index]
-    const next = normalized[index + 1]
-
-    if (char === '"' && quoted && next === '"') {
-      current += '"'
-      index += 1
-      continue
-    }
-
-    if (char === '"') {
-      quoted = !quoted
-      continue
-    }
-
-    if (!quoted && char === delimiter) {
-      row.push(current)
-      current = ''
-      continue
-    }
-
-    if (!quoted && (char === '\n' || char === '\r')) {
-      if (char === '\r' && next === '\n') index += 1
-      row.push(current)
-      if (row.some((cell) => cell.trim())) rows.push(row)
-      row = []
-      current = ''
-      continue
-    }
-
-    current += char
+async function loadFoodIds(supabase: SupabaseClient, sourceKeys: string[]) {
+  const result = new Map<string, string>()
+  for (const batch of chunks(sourceKeys, BATCH_SIZE)) {
+    const { data, error } = await supabase.from('taco_foods').select('id,source_key').in('source_key', batch)
+    if (error) throw new Error(`Falha ao relacionar nutrientes TACO: ${error.message}`)
+    for (const row of (data ?? []) as Array<{ id: string; source_key: string }>) result.set(row.source_key, row.id)
   }
-
-  row.push(current)
-  if (row.some((cell) => cell.trim())) rows.push(row)
-  return rows
+  if (result.size !== sourceKeys.length) throw new Error('Nem todos os alimentos importados receberam um identificador.')
+  return result
 }
 
-function read(record: string[], index: number | null) {
-  return index === null ? '' : record[index] ?? ''
+async function upsertNutrients(
+  supabase: SupabaseClient, nutrients: TacoNutrientInput[], foodIds: Map<string, string>,
+) {
+  for (const batch of chunks(nutrients, BATCH_SIZE)) {
+    const rows = batch.map(({ source_key, ...nutrient }) => ({ ...nutrient, food_id: foodIds.get(source_key) }))
+    const { error } = await supabase.from('taco_food_nutrients').upsert(rows, {
+      onConflict: 'food_id,nutrient_code',
+    })
+    if (error) throw new Error(`Falha ao importar nutrientes detalhados: ${error.message}`)
+  }
 }
 
-function cleanCode(value: string) {
-  const text = cleanText(value)
-  if (!text) return null
-  return text.replace(/\.0+$/, '')
+function parseArguments(args: string[]) {
+  const dryRun = args.includes('--dry-run')
+  const explicitPath = args.find((argument) => !argument.startsWith('--'))
+  const inputPath = explicitPath ? resolve(explicitPath) : DEFAULT_INPUTS.map(resolve).find(existsSync)
+  if (!inputPath) throw new Error('Arquivo TACO não encontrado em data/taco/. Informe o caminho da planilha oficial.')
+  if (!SUPPORTED_EXTENSIONS.has(extname(inputPath).toLowerCase())) throw new Error('Use a planilha oficial XLS ou XLSX da TACO.')
+  if (!existsSync(inputPath)) throw new Error(`Arquivo TACO não encontrado em ${inputPath}.`)
+  return { dryRun, inputPath }
+}
+
+function sheetRows(workbook: XLSX.WorkBook, sheetName: string) {
+  return XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+    blankrows: false, defval: '', header: 1, raw: false,
+  }).map((row) => row.map((value) => String(value ?? '').trim()))
+}
+
+function isCategoryRow(row: string[]) {
+  const first = cleanText(row[0])
+  return Boolean(first && !cleanText(row[1]) && !/^(número do|alimento|legenda|\*|†)/i.test(first))
+}
+
+function foodCode(value: unknown) {
+  const text = cleanText(String(value ?? ''))
+  return text && /^\d+(?:\.0+)?$/.test(text) ? text.replace(/\.0+$/, '') : null
+}
+
+function numericValue(value: unknown) {
+  let text = String(value ?? '').trim()
+  if (!text || /^(-|na|n\/a|nd|tr|trace|\*)$/i.test(text)) return null
+  text = text.replace(/\s+/g, '')
+  const comma = text.lastIndexOf(',')
+  const dot = text.lastIndexOf('.')
+  if (comma >= 0 && dot >= 0) text = comma > dot ? text.replace(/\./g, '').replace(',', '.') : text.replace(/,/g, '')
+  else text = text.replace(',', '.')
+  const match = text.match(/-?\d+(?:\.\d+)?/)
+  return match ? Number(match[0]) : null
+}
+
+function valueStatus(value: string | null): TacoNutrientInput['value_status'] {
+  if (!value) return 'not_analyzed'
+  if (/^(tr|trace)$/i.test(value)) return 'trace'
+  if (/^(na|n\/a)$/i.test(value)) return 'not_applicable'
+  if (/^(nd|-|\*)$/i.test(value)) return 'not_analyzed'
+  return numericValue(value) === null ? 'missing' : 'measured'
+}
+
+export function normalizeSearchText(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
 function cleanText(value: string | null | undefined) {
@@ -486,61 +359,33 @@ function cleanText(value: string | null | undefined) {
   return text || null
 }
 
-function numberValue(value: string) {
-  let text = value.trim()
-  if (!text || /^(-|na|n\/a|nd|tr|trace|\*)$/i.test(text)) return null
-
-  text = text.replace(/\s+/g, '')
-  const commaIndex = text.lastIndexOf(',')
-  const dotIndex = text.lastIndexOf('.')
-  if (commaIndex >= 0 && dotIndex >= 0) {
-    text = commaIndex > dotIndex
-      ? text.replace(/\./g, '').replace(',', '.')
-      : text.replace(/,/g, '')
-  } else {
-    text = text.replace(',', '.')
-  }
-
-  const match = text.match(/-?\d+(?:\.\d+)?/)
-  return match ? Number(match[0]) : null
-}
-
-function normalizeSearchText(value: string) {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function fallbackCategory(sourceName: string) {
-  const normalized = normalizeSearchText(sourceName)
-  if (!normalized || ['planilha1', 'sheet1', 'taco'].includes(normalized)) return null
-  return cleanText(sourceName)
-}
-
-function cellText(value: unknown) {
-  if (value === null || value === undefined) return ''
-  return String(value)
-}
-
 function chunks<T>(items: T[], size: number) {
-  const result: T[][] = []
-  for (let index = 0; index < items.length; index += size) {
-    result.push(items.slice(index, index + size))
-  }
-  return result
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size))
 }
 
 function loadDotEnv(path: string) {
   const fullPath = resolve(path)
   if (!existsSync(fullPath)) return
-
   for (const line of readFileSync(fullPath, 'utf8').split(/\r?\n/)) {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue
     const [key, ...parts] = trimmed.split('=')
     process.env[key.trim()] ||= parts.join('=').trim().replace(/^["']|["']$/g, '')
   }
+}
+
+function printSummary(inputPath: string, checksum: string, parsed: ParsedTacoWorkbook, message: string) {
+  console.log(message)
+  console.log(`Arquivo: ${inputPath}`)
+  console.log(`SHA-256: ${checksum}`)
+  console.log(`Alimentos: ${parsed.foods.length}`)
+  console.log(`Valores estruturados: ${parsed.nutrients.length}`)
+}
+
+const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : ''
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error)
+    process.exitCode = 1
+  })
 }
