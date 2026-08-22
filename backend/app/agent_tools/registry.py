@@ -47,10 +47,34 @@ class AgentToolRegistry:
         return [self._schemas[name] for name in self._schemas if name in allowed_names]
 
     def names_for_nutritionist(self, *, has_patient_context: bool) -> set[str]:
-        # General chats may first resolve a patient and then continue with a
-        # patient-scoped operation in the same tool loop. Handlers still deny
-        # every write until an authorized context has actually been hydrated.
-        return set(self._specs)
+        return {
+            name
+            for name, spec in self._specs.items()
+            if has_patient_context or not spec.patient_context_required
+        }
+
+    def names_for_domain(
+        self,
+        domain: str,
+        *,
+        has_patient_context: bool,
+        task_allowed_names: set[str] | None = None,
+    ) -> set[str]:
+        allowed = task_allowed_names if task_allowed_names is not None else self.names
+        return {
+            name
+            for name, spec in self._specs.items()
+            if name in allowed
+            and (domain == "composite" or spec.domain == domain)
+            and (has_patient_context or not spec.patient_context_required)
+        }
+
+    def required_arguments(self, name: str) -> set[str]:
+        schema = self._schemas.get(name) or {}
+        function = schema.get("function") if isinstance(schema, dict) else {}
+        parameters = function.get("parameters") if isinstance(function, dict) else {}
+        required = parameters.get("required") if isinstance(parameters, dict) else []
+        return {str(item) for item in required or []}
 
     @property
     def names(self) -> set[str]:

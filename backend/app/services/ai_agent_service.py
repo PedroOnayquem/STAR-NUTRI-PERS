@@ -18,6 +18,7 @@ from ..agent_tools.registry import (
 )
 from ..agent_tools.schemas import AGENT_TOOLS
 from ..core.config import settings
+from .ai_task_state_service import ActiveTask, AiTaskStateService
 from .openai_service import OpenAIChatService
 from .supabase_workspace_service import SupabaseWorkspaceService
 
@@ -33,6 +34,7 @@ class AiAgentService:
         self.workspace = workspace
         self.ai_service = ai_service
         self.registry = AgentToolRegistry(AGENT_TOOLS, default_specs())
+        self.task_state = AiTaskStateService()
 
     async def run(
         self,
@@ -51,12 +53,76 @@ class AiAgentService:
         # independently of the prompt and independently of the route used.
         if profile.get("role") != "nutritionist":
             return []
-        allowed_tools = self.registry.names_for_nutritionist(
-            has_patient_context=bool(context.get("patient"))
-        )
-        pending_state = await self.workspace.get_ai_conversation_state(
+        claimed = await self.workspace.claim_ai_conversation_turn(
             conversation_id=chat["id"],
             user_id=profile["id"],
+            message_id=user_message_record["id"],
+        )
+        if not claimed:
+            return [
+                await self._record_action(
+                    actor=profile,
+                    arguments={"message_id": user_message_record["id"]},
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    error="Ja existe uma resposta em processamento nesta conversa.",
+                    error_code="conversation_turn_in_progress",
+                    intent="conversation_turn",
+                    message=user_message_record,
+                    result={
+                        "label": "Conversa ocupada",
+                        "summary": (
+                            "Ainda estou concluindo a mensagem anterior desta conversa. "
+                            "Aguarde a resposta antes de enviar outra solicitacao."
+                        ),
+                    },
+                    status="blocked",
+                    tool_name="conversation_state",
+                )
+            ]
+
+        try:
+            return await self._run_claimed_turn(
+                actor=profile,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                history=history,
+                reasoning_level=reasoning_level,
+                token=token,
+                user_message=user_message,
+                user_message_record=user_message_record,
+            )
+        finally:
+            try:
+                await self.workspace.release_ai_conversation_turn(
+                    conversation_id=chat["id"],
+                    user_id=profile["id"],
+                    message_id=user_message_record["id"],
+                )
+            except Exception:
+                logger.exception(
+                    "Could not release AI conversation turn lock",
+                    extra={"chat_id": chat.get("id"), "message_id": user_message_record.get("id")},
+                )
+
+    async def _run_claimed_turn(
+        self,
+        *,
+        actor: dict,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        history: list[dict[str, str]],
+        reasoning_level: str,
+        token: str,
+        user_message: str,
+        user_message_record: dict,
+    ) -> list[dict]:
+        pending_state = await self.workspace.get_ai_conversation_state(
+            conversation_id=chat["id"],
+            user_id=actor["id"],
         )
         pending_resolution = self._resolve_pending_action(
             pending_state=pending_state,
@@ -64,12 +130,15 @@ class AiAgentService:
         )
         if pending_resolution:
             tool_name, arguments = pending_resolution
+            allowed_tools = self.registry.names_for_nutritionist(
+                has_patient_context=bool(context.get("patient"))
+            )
             if tool_name not in allowed_tools:
                 if pending_state:
                     await self.workspace.clear_ai_conversation_state(pending_state["id"])
                 return [
                     await self._record_action(
-                        actor=profile,
+                        actor=actor,
                         arguments={
                             "message": user_message,
                             "pending_action": tool_name,
@@ -85,7 +154,7 @@ class AiAgentService:
                     )
                 ]
             result = await self._execute_tool(
-                actor=profile,
+                actor=actor,
                 arguments=arguments,
                 chat=chat,
                 chat_scope=chat_scope,
@@ -99,11 +168,10 @@ class AiAgentService:
             return [result]
 
         if pending_state and _is_cancellation_message(_normalize(user_message)):
-            if pending_state:
-                await self.workspace.clear_ai_conversation_state(pending_state["id"])
+            await self.workspace.clear_ai_conversation_state(pending_state["id"])
             return [
                 await self._record_action(
-                    actor=profile,
+                    actor=actor,
                     arguments={"message": user_message},
                     chat=chat,
                     chat_scope=chat_scope,
@@ -118,9 +186,116 @@ class AiAgentService:
                     tool_name="conversation_state",
                 )
             ]
+
+        active_task = self.task_state.prepare_turn(
+            state=pending_state,
+            user_message=user_message,
+        )
+        if not active_task:
+            # Pure conversation: no operational tool is exposed without domain
+            # evidence. This prevents a generic "continue" from reviving an old
+            # patient, diet or training operation.
+            return []
+
+        active_task = await self._persist_task(
+            actor=actor,
+            active_task=active_task,
+            chat=chat,
+            context=context,
+            message=user_message_record,
+        )
+        allowed_tools = self.registry.names_for_domain(
+            active_task.domain,
+            has_patient_context=bool(context.get("patient")),
+            task_allowed_names=active_task.allowed_tools,
+        )
+
+        if active_task.intent == "taco_nutrition_lookup":
+            if active_task.slots.get("source") not in {None, "TACO"}:
+                return [
+                    await self._task_clarification_action(
+                        actor=actor,
+                        active_task=active_task,
+                        chat=chat,
+                        chat_scope=chat_scope,
+                        context=context,
+                        error_code="unsupported_authoritative_source",
+                        message=user_message_record,
+                        summary=(
+                            "A fonte informada nao e a TACO. Posso consultar a TACO, "
+                            "mas nao vou apresentar dados dela como se fossem de outra tabela."
+                        ),
+                    )
+                ]
+            if active_task.missing_slots:
+                return [
+                    await self._task_clarification_action(
+                        actor=actor,
+                        active_task=active_task,
+                        chat=chat,
+                        chat_scope=chat_scope,
+                        context=context,
+                        error_code="missing_required_slots",
+                        message=user_message_record,
+                        summary=self._missing_slot_question(active_task.missing_slots),
+                    )
+                ]
+            if not self._is_multi_food_request(user_message):
+                arguments = self.task_state.merge_tool_arguments(
+                    active_task,
+                    tool_name="resolve_taco_nutrition",
+                    arguments={},
+                )
+                action = await self._execute_tool(
+                    actor=actor,
+                    active_task=active_task,
+                    arguments=arguments,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    intent=active_task.intent,
+                    message=user_message_record,
+                    tool_name="resolve_taco_nutrition",
+                )
+                active_task = self.task_state.from_action(active_task, action)
+                final_status = "completed" if action.get("success") else active_task.status
+                await self._persist_task(
+                    actor=actor,
+                    active_task=active_task,
+                    chat=chat,
+                    context=context,
+                    message=user_message_record,
+                    status=final_status,
+                )
+                return [action]
+
         tools = self.registry.schemas_for(allowed_tools)
+        if not tools:
+            return [
+                await self._task_clarification_action(
+                    actor=actor,
+                    active_task=active_task,
+                    chat=chat,
+                    chat_scope=chat_scope,
+                    context=context,
+                    error_code="patient_context_required",
+                    message=user_message_record,
+                    summary=(
+                        "Esta tarefa precisa de um paciente em foco. Informe ou selecione "
+                        "o paciente antes de continuar."
+                    ),
+                )
+            ]
         tool_messages: list[dict[str, Any]] = [
-            {"role": "developer", "content": self._build_tool_prompt(chat_scope, context, profile)},
+            {
+                "role": "developer",
+                "content": self._build_tool_prompt(
+                    chat_scope,
+                    context,
+                    actor,
+                    active_task=active_task,
+                ),
+            },
             *history,
             {"role": "user", "content": user_message},
         ]
@@ -145,7 +320,7 @@ class AiAgentService:
                     self._patient_id(context) or None,
                 )
                 actions.append(await self._record_action(
-                    actor=profile, arguments={}, chat=chat, chat_scope=chat_scope,
+                    actor=actor, arguments={}, chat=chat, chat_scope=chat_scope,
                     context=context, error="O provedor de IA nao conseguiu preparar a acao solicitada.",
                     intent="tool_orchestration", message=user_message_record,
                     result={"label": "Acao nao concluida", "summary": "O servico de IA nao conseguiu estruturar a proxima acao. Nenhuma acao pendente foi presumida como concluida."},
@@ -171,7 +346,7 @@ class AiAgentService:
                 fingerprint = f"{tool_name}:{raw_arguments}"
                 if fingerprint in fingerprints:
                     result = await self._record_action(
-                        actor=profile, arguments={"raw_arguments": raw_arguments}, chat=chat,
+                        actor=actor, arguments={"raw_arguments": raw_arguments}, chat=chat,
                         chat_scope=chat_scope, context=context,
                         error="A IA repetiu a mesma operacao; a duplicata foi bloqueada.",
                         intent=tool_name or "unknown_tool", message=user_message_record,
@@ -189,27 +364,67 @@ class AiAgentService:
                 except (json.JSONDecodeError, TypeError):
                     arguments = {"raw_arguments": raw_arguments}
                     result = await self._record_action(
-                        actor=profile, arguments=arguments, chat=chat, chat_scope=chat_scope,
+                        actor=actor, arguments=arguments, chat=chat, chat_scope=chat_scope,
                         context=context, error="Argumentos invalidos gerados pela IA.",
                         intent=tool_name or "unknown_tool", message=user_message_record,
                         status="failed", tool_name=tool_name or "unknown_tool",
                         error_code="invalid_tool_arguments",
                     )
                 else:
+                    arguments = self.task_state.merge_tool_arguments(
+                        active_task,
+                        tool_name=tool_name,
+                        arguments=arguments,
+                    )
                     if tool_name not in allowed_tools:
                         result = await self._record_action(
-                            actor=profile, arguments=arguments, chat=chat, chat_scope=chat_scope,
-                            context=context, error="Tool nao permitida para este perfil ou escopo.",
-                            intent=tool_name, message=user_message_record, status="skipped",
-                            tool_name=tool_name, error_code="authorization_denied",
+                            actor=actor, arguments=arguments, chat=chat, chat_scope=chat_scope,
+                            context=context, error="Tool incompativel com a tarefa ativa.",
+                            intent=tool_name, message=user_message_record, status="blocked",
+                            tool_name=tool_name, error_code="task_domain_mismatch",
                         )
                     else:
-                        result = await self._execute_tool(
-                            actor=profile, arguments=arguments, chat=chat,
-                            chat_scope=chat_scope, context=context, intent=tool_name,
-                            message=user_message_record, tool_name=tool_name,
-                        )
+                        missing_arguments = [
+                            name
+                            for name in self.registry.required_arguments(tool_name)
+                            if arguments.get(name) in (None, "", [])
+                        ]
+                        if missing_arguments:
+                            result = await self._record_action(
+                                actor=actor,
+                                arguments=arguments,
+                                chat=chat,
+                                chat_scope=chat_scope,
+                                context=context,
+                                error="Parametros obrigatorios ausentes para a tool.",
+                                error_code="missing_required_slots",
+                                intent=active_task.intent,
+                                message=user_message_record,
+                                result={
+                                    "label": "Informacao necessaria",
+                                    "missing_slots": missing_arguments,
+                                    "requires_clarification": True,
+                                    "summary": self._missing_slot_question(missing_arguments),
+                                },
+                                status="waiting_clarification",
+                                tool_name=tool_name,
+                            )
+                        else:
+                            result = await self._execute_tool(
+                                actor=actor, active_task=active_task,
+                                arguments=arguments, chat=chat,
+                                chat_scope=chat_scope, context=context, intent=active_task.intent,
+                                message=user_message_record, tool_name=tool_name,
+                            )
                 actions.append(result)
+                active_task = self.task_state.from_action(active_task, result)
+                active_task = await self._persist_task(
+                    actor=actor,
+                    active_task=active_task,
+                    chat=chat,
+                    context=context,
+                    message=user_message_record,
+                )
                 if tool_name == "search_patient_by_name" and result.get("success"):
                     matches = (result.get("result") or {}).get("matches") or []
                     if len(matches) == 1 and matches[0].get("id"):
@@ -220,29 +435,149 @@ class AiAgentService:
                         )
                         context.clear()
                         context.update(hydrated)
+                        allowed_tools = self.registry.names_for_domain(
+                            active_task.domain,
+                            has_patient_context=True,
+                            task_allowed_names=active_task.allowed_tools,
+                        )
+                        tools = self.registry.schemas_for(allowed_tools)
                 tool_messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "content": json.dumps(result, ensure_ascii=False, default=str),
                 })
-                if result.get("status") == "pending_confirmation":
+                if result.get("status") in {"pending_confirmation", "waiting_clarification", "blocked"}:
                     return actions
 
         else:
             actions.append(await self._record_action(
-                actor=profile, arguments={}, chat=chat, chat_scope=chat_scope,
+                actor=actor, arguments={}, chat=chat, chat_scope=chat_scope,
                 context=context, error="O limite seguro de etapas do agente foi atingido.",
                 intent="tool_orchestration", message=user_message_record,
                 status="failed", tool_name="tool_orchestration", error_code="step_limit_exceeded",
             ))
 
+        if actions:
+            final_task_status = (
+                "completed"
+                if all(action.get("status") != "failed" for action in actions)
+                else "failed"
+            )
+            await self._persist_task(
+                actor=actor,
+                active_task=active_task,
+                chat=chat,
+                context=context,
+                message=user_message_record,
+                status=final_task_status,
+            )
         return actions
+
+    async def _persist_task(
+        self,
+        *,
+        actor: dict,
+        active_task: ActiveTask,
+        chat: dict,
+        context: dict,
+        message: dict,
+        status: str | None = None,
+    ) -> ActiveTask:
+        resolved_status = status or active_task.status
+        saved = await self.workspace.upsert_ai_conversation_state(
+            self.task_state.payload(
+                active_task,
+                conversation_id=chat["id"],
+                user_id=actor["id"],
+                patient_id=(context.get("patient") or {}).get("id"),
+                last_message_id=message["id"],
+                expires_at=(_sao_paulo_now() + timedelta(minutes=30)).isoformat(),
+                status=resolved_status,
+            )
+        )
+        return ActiveTask(
+            domain=active_task.domain,
+            intent=active_task.intent,
+            slots=dict(active_task.slots),
+            required_slots=list(active_task.required_slots),
+            missing_slots=list(active_task.missing_slots),
+            ambiguous_slots=list(active_task.ambiguous_slots),
+            allowed_tools=set(active_task.allowed_tools),
+            status=resolved_status,
+            state_id=saved.get("id") or active_task.state_id,
+        )
+
+    async def _task_clarification_action(
+        self,
+        *,
+        actor: dict,
+        active_task: ActiveTask,
+        chat: dict,
+        chat_scope: str,
+        context: dict,
+        error_code: str,
+        message: dict,
+        summary: str,
+    ) -> dict:
+        await self._persist_task(
+            actor=actor,
+            active_task=active_task,
+            chat=chat,
+            context=context,
+            message=message,
+            status="waiting_user",
+        )
+        return await self._record_action(
+            actor=actor,
+            arguments=active_task.slots,
+            chat=chat,
+            chat_scope=chat_scope,
+            context=context,
+            error=summary,
+            error_code=error_code,
+            intent=active_task.intent,
+            message=message,
+            result={
+                "active_task": {
+                    "domain": active_task.domain,
+                    "intent": active_task.intent,
+                    "missing_slots": active_task.missing_slots,
+                    "ambiguous_slots": active_task.ambiguous_slots,
+                    "status": "waiting_user",
+                },
+                "label": "Aguardando esclarecimento",
+                "requires_clarification": True,
+                "summary": summary,
+            },
+            status="waiting_clarification",
+            tool_name="conversation_state",
+        )
+
+    def _missing_slot_question(self, missing_slots: list[str]) -> str:
+        labels = {
+            "food_name": "Qual alimento você deseja consultar?",
+            "quantity_g": "Qual quantidade em gramas você deseja consultar?",
+            "source": "Qual fonte de composição nutricional você deseja usar?",
+            "requested_nutrients": "Qual informação nutricional você deseja consultar?",
+        }
+        for slot in missing_slots:
+            if slot in labels:
+                return labels[slot]
+        return f"Preciso destas informações para continuar: {', '.join(missing_slots)}."
+
+    def _is_multi_food_request(self, user_message: str) -> bool:
+        quantities = re.findall(
+            r"\b\d+(?:[.,]\d+)?\s*(?:g|gramas?|kg)\b",
+            _normalize(user_message),
+        )
+        return len(quantities) > 1
 
     def _build_tool_prompt(
         self,
         chat_scope: str,
         context: dict,
         profile: dict,
+        active_task: ActiveTask | None = None,
     ) -> str:
         now = _sao_paulo_now().isoformat()
         patient = context.get("patient") or {}
@@ -269,6 +604,20 @@ class AiAgentService:
             "treino_ativo": active_workout,
             "condicoes_clinicas_atuais": context.get("conditions", [])[:12],
             "metricas_recentes": context.get("variable_metrics", [])[:8],
+            "tarefa_ativa": (
+                {
+                    "domain": active_task.domain,
+                    "intent": active_task.intent,
+                    "slots": active_task.slots,
+                    "required_slots": active_task.required_slots,
+                    "missing_slots": active_task.missing_slots,
+                    "ambiguous_slots": active_task.ambiguous_slots,
+                    "status": active_task.status,
+                    "allowed_tools": sorted(active_task.allowed_tools),
+                }
+                if active_task
+                else None
+            ),
         }
         summary_json = json.dumps(summary, ensure_ascii=False, default=str).replace(
             "</", "<\\/"
@@ -294,6 +643,9 @@ class AiAgentService:
             "ou conflitante por conhecimento do modelo. Sugestão gerada pela IA nunca deve ser apresentada como dado cadastrado.\n"
             "</authoritative_sources>\n\n"
             "<tool_execution>\n"
+            "A tarefa_ativa e seus slots são estado autoritativo do backend. A mensagem atual apenas atualiza slots; "
+            "nunca apague um valor preenchido por ele ter sido omitido em uma resposta curta. Use exclusivamente as "
+            "tools disponibilizadas neste turno. Não tente trocar de domínio nem recriar a intenção do zero. "
             "Use leituras antes de escritas quando a ação depender do estado atual. Nunca afirme que algo foi salvo, "
             "executado ou atualizado sem sucesso real da tool. Comandos naturais de cadastro devem chamar a tool, não "
             "virar instruções manuais. Exclusão, substituição e sobrescrita usam request_confirmation uma vez; uma resposta "
@@ -333,6 +685,7 @@ class AiAgentService:
         self,
         *,
         actor: dict,
+        active_task: ActiveTask | None = None,
         arguments: dict,
         chat: dict,
         chat_scope: str,
@@ -379,6 +732,33 @@ class AiAgentService:
                 intent=intent,
                 message=message,
                 status="skipped",
+                tool_name=tool_name,
+            )
+
+        if active_task and (
+            (active_task.domain != "composite" and spec.domain != active_task.domain)
+            or tool_name not in active_task.allowed_tools
+        ):
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Tool incompatível com a tarefa ativa.",
+                error_code="task_domain_mismatch",
+                intent=active_task.intent,
+                message=message,
+                result={
+                    "active_domain": active_task.domain,
+                    "attempted_domain": spec.domain,
+                    "label": "Tool bloqueada pelo task lock",
+                    "summary": (
+                        f"A tool {tool_name} foi bloqueada porque a tarefa ativa "
+                        f"pertence ao domínio {active_task.domain}."
+                    ),
+                },
+                status="blocked",
                 tool_name=tool_name,
             )
 
@@ -1043,9 +1423,11 @@ class AiAgentService:
                 "conversation_id": chat["id"],
                 "user_id": actor["id"],
                 "patient_id": self._patient_id(context),
+                "state_kind": "confirmation",
                 "pending_action": pending_action,
                 "target_entity": arguments.get("target_entity"),
                 "pending_payload": pending_payload,
+                "task_status": "pending_confirmation",
                 "expires_at": (_sao_paulo_now() + timedelta(minutes=30)).isoformat(),
             }
         )
@@ -1186,6 +1568,7 @@ class AiAgentService:
                         "conversation_id": chat["id"],
                         "user_id": actor["id"],
                         "patient_id": patient_id,
+                        "state_kind": "confirmation",
                         "pending_action": "update_patient_birth_date",
                         "target_entity": "patient_birth_date",
                         "pending_payload": {
@@ -1193,6 +1576,7 @@ class AiAgentService:
                             "needs_day_month": True,
                             "patient_id": patient_id,
                         },
+                        "task_status": "pending_confirmation",
                         "expires_at": (
                             _sao_paulo_now() + timedelta(minutes=30)
                         ).isoformat(),
@@ -1699,7 +2083,25 @@ class AiAgentService:
             arguments.get("quantity_g") or arguments.get("quantity")
         )
         if quantity_g is None:
-            quantity_g = 100
+            return await self._record_action(
+                actor=actor,
+                arguments=arguments,
+                chat=chat,
+                chat_scope=chat_scope,
+                context=context,
+                error="Quantidade em gramas ausente.",
+                error_code="missing_required_slots",
+                intent="nutrition_lookup",
+                message=message,
+                result={
+                    "label": "Quantidade necessária",
+                    "missing_slots": ["quantity_g"],
+                    "requires_clarification": True,
+                    "summary": "Qual quantidade em gramas você deseja consultar?",
+                },
+                status="waiting_clarification",
+                tool_name="resolve_taco_nutrition",
+            )
 
         requested_nutrients = [
             value
@@ -1759,7 +2161,7 @@ class AiAgentService:
                         f"Confirme uma destas opcoes: {names}."
                     ),
                 },
-                status="skipped",
+                status="waiting_clarification",
                 tool_name="resolve_taco_nutrition",
             )
 
@@ -2686,12 +3088,14 @@ class AiAgentService:
                     "conversation_id": chat["id"],
                     "user_id": actor["id"],
                     "patient_id": patient["id"],
+                    "state_kind": "confirmation",
                     "pending_action": "add_workout_observation",
                     "target_entity": "training_plan",
                     "pending_payload": {
                         "training_plan_id": persisted["training_plan_id"],
                         "observation": pending_observation,
                     },
+                    "task_status": "pending_confirmation",
                     "expires_at": (_sao_paulo_now() + timedelta(minutes=30)).isoformat(),
                 }
             )
