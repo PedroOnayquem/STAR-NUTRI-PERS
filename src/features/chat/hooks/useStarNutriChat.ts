@@ -27,6 +27,7 @@ export function useStarNutriChat({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [streaming, setStreaming] = useState('')
   const [streamingActions, setStreamingActions] = useState<unknown[]>([])
+  const [streamingSessionId, setStreamingSessionId] = useState<string | null>(null)
   const [pendingUserMessage, setPendingUserMessage] = useState<ChatMessageRecord | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scopedPatientId = scope === 'nutritionist' ? patientId : undefined
@@ -186,6 +187,7 @@ export function useStarNutriChat({
         metadata: null,
         created_at: new Date().toISOString(),
       })
+      setStreamingSessionId(resolvedSessionId)
 
       await sendChatMessageStream({
         chatScope: nutritionistChatScope,
@@ -197,6 +199,7 @@ export function useStarNutriChat({
         sessionId: resolvedSessionId,
         onSession: (sessionId) => {
           setSelectedSessionId(sessionId)
+          setStreamingSessionId(sessionId)
           setPendingUserMessage((message) =>
             message ? { ...message, chat_id: sessionId } : message,
           )
@@ -219,6 +222,7 @@ export function useStarNutriChat({
           setPendingUserMessage(null)
           setStreaming('')
           setStreamingActions([])
+          setStreamingSessionId(null)
           queryClient.invalidateQueries({ queryKey: sessionsQueryKey, refetchType: 'inactive' })
           if (externalQueryKey) {
             queryClient.invalidateQueries({ queryKey: externalQueryKey })
@@ -232,6 +236,7 @@ export function useStarNutriChat({
     onSettled: () => {
       setPendingUserMessage(null)
       setStreamingActions([])
+      setStreamingSessionId(null)
     },
   })
 
@@ -255,7 +260,7 @@ export function useStarNutriChat({
     sendMessage: sendMutation.mutate,
     sending: sendMutation.isPending,
     sessions: sessionsQuery.data ?? [],
-    streaming,
-    streamingActions,
+    streaming: streamingSessionId === activeSessionId ? streaming : '',
+    streamingActions: streamingSessionId === activeSessionId ? streamingActions : [],
   }
 }

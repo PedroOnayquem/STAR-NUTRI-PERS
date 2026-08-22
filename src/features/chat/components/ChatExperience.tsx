@@ -996,7 +996,13 @@ type AgentAction = {
   error?: string | null
   label?: string
   requires_confirmation?: boolean
-  status?: 'executed' | 'skipped' | 'failed' | 'pending_confirmation'
+  status?:
+    | 'executed'
+    | 'skipped'
+    | 'failed'
+    | 'pending_confirmation'
+    | 'waiting_clarification'
+    | 'blocked'
   summary?: string | null
   tool?: string
 }
@@ -1063,6 +1069,8 @@ function AgentActionList({ actions }: { actions: AgentAction[] }) {
 function actionStatusLabel(status: AgentAction['status']) {
   if (status === 'executed') return 'Confirmado pelo sistema'
   if (status === 'pending_confirmation') return 'Aguardando sua confirmação'
+  if (status === 'waiting_clarification') return 'Aguardando seu esclarecimento'
+  if (status === 'blocked') return 'Bloqueado com segurança'
   if (status === 'failed') return 'Não concluído'
   return 'Não executado'
 }
@@ -1076,6 +1084,7 @@ function getAgentActions(metadata: ChatMessageRecord['metadata']): AgentAction[]
 function actionIcon(status: AgentAction['status']) {
   if (status === 'executed') return CircleCheck
   if (status === 'pending_confirmation') return Clock
+  if (status === 'waiting_clarification') return Clock
   if (status === 'failed') return XCircle
   return CircleAlert
 }
@@ -1085,6 +1094,12 @@ function actionTone(status: AgentAction['status']) {
     return 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-400/20 dark:bg-emerald-400/10 dark:text-emerald-200'
   }
   if (status === 'pending_confirmation') {
+    return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'
+  }
+  if (status === 'waiting_clarification') {
+    return 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-400/20 dark:bg-sky-400/10 dark:text-sky-200'
+  }
+  if (status === 'blocked') {
     return 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-200'
   }
   if (status === 'failed') {
