@@ -138,7 +138,10 @@ AGENT_TOOLS = [
                             "type": "object",
                             "properties": {
                                 "meal_name": {"type": "string"},
-                                "meal_time": {"type": "string"},
+                                "meal_time": {
+                                    "description": "Horário opcional no formato HH:MM de 24 horas.",
+                                    "type": "string",
+                                },
                                 "foods": {"type": "array", "items": {"type": "object"}},
                                 "notes": {"type": "string"},
                             },
