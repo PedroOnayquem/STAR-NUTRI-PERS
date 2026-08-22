@@ -43,6 +43,10 @@ Estados principais:
 - `blocked`: a execução foi negada por lock, domínio ou permissão;
 - `cancelled` e `failed`: encerramentos explícitos.
 
+Uma tarefa `completed` permanece disponível como referência contextual, mas não
+como lock permanente. Apenas uma continuação referencial pode herdá-la. Evidência
+e recuperação entre chats estão detalhadas em `AI_LAYERED_MEMORY.md`.
+
 ## Seleção e validação de ferramentas
 
 O registro de tools fornece apenas o subconjunto compatível com o domínio ativo.
