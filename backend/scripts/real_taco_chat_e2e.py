@@ -92,7 +92,7 @@ def run() -> dict[str, Any]:
                 endpoint="chat/nutritionist/send",
                 token=token,
                 session_id=session_id,
-                content="Quantas calorias tem 150g de arroz segundo a tabela TACO?",
+                content="Quantas calorias tem 150g de arroz integral segundo a tebela taco?",
             )
             ambiguous = [
                 action
@@ -102,19 +102,52 @@ def run() -> dict[str, Any]:
             if not ambiguous or (ambiguous[-1].get("result") or {}).get(
                 "resolution"
             ) != "ambiguous":
-                raise E2EFailure(f"generic rice was not classified ambiguous: {ambiguous_actions}")
+                raise E2EFailure(f"integral rice was not classified ambiguous: {ambiguous_actions}")
             if "?" not in ambiguous_answer or "encontrado(s)" in ambiguous_answer:
                 raise E2EFailure(
                     f"generic rice response did not ask useful clarification: {ambiguous_answer}"
                 )
-            report["checks"].append("generic_query_requests_clarification")
+            states = _rows(
+                client,
+                "ai_conversation_state",
+                {
+                    "conversation_id": f"eq.{session_id}",
+                    "user_id": f"eq.{state['nutritionist_user_id']}",
+                },
+            )
+            slots = (states[0].get("task_slots") or {}) if len(states) == 1 else {}
+            if len(states) != 1 or states[0].get("task_status") != "waiting_user" or slots.get("quantity_g") != 150:
+                raise E2EFailure(f"150g active-task slot was not persisted: {states}")
+            report["checks"].append("ambiguity_persists_active_task_and_150g_slot")
+
+            other_session = _require(
+                client.post(
+                    f"{API_BASE}/chat/nutritionist/sessions",
+                    headers=_bearer(token),
+                    json={"chat_scope": "general", "title": f"E2E ISOLATION {suffix}"},
+                ),
+                {200},
+                "create isolated nutritionist chat",
+            )
+            other_actions, _ = _send(
+                client,
+                endpoint="chat/nutritionist/send",
+                token=token,
+                session_id=str(other_session["id"]),
+                content="Agora procure o paciente Pedro.",
+            )
+            if not any(action.get("operation") == "search_patient_by_name" for action in other_actions):
+                raise E2EFailure(f"explicit patient task was not routed: {other_actions}")
+            if any(action.get("operation") in {"resolve_taco_nutrition", "search_taco_foods"} for action in other_actions):
+                raise E2EFailure(f"patient conversation received TACO tools: {other_actions}")
+            report["checks"].append("second_conversation_isolated_and_explicit_switch_routed")
 
             resolved_actions, resolved_answer = _send(
                 client,
                 endpoint="chat/nutritionist/send",
                 token=token,
                 session_id=session_id,
-                content="Considere arroz tipo 1 cozido.",
+                content="cozido",
             )
             resolved = [
                 action
@@ -124,11 +157,28 @@ def run() -> dict[str, Any]:
             ]
             if not resolved:
                 raise E2EFailure(f"clarification did not complete TACO lookup: {resolved_actions}")
-            if "192" not in resolved_answer or "taco" not in resolved_answer.lower():
+            if "186" not in resolved_answer or "taco" not in resolved_answer.lower():
                 raise E2EFailure(
-                    f"resolved response is not grounded in TACO 192 kcal: {resolved_answer}"
+                    f"resolved response is not grounded in TACO 186 kcal: {resolved_answer}"
                 )
-            report["checks"].append("contextual_clarification_returns_192_kcal")
+            resolved_result = resolved[-1].get("result") or {}
+            if (resolved_result.get("nutrients") or {}).get("energy_kcal") != 186:
+                raise E2EFailure(f"deterministic 150g calculation is wrong: {resolved_result}")
+            if (resolved[-1].get("arguments") or {}).get("quantity_g") != 150:
+                raise E2EFailure(f"resolved tool lost the 150g slot: {resolved[-1]}")
+            if any(action.get("operation") == "search_patient_by_name" for action in resolved_actions):
+                raise E2EFailure(f"TACO continuation called a patient tool: {resolved_actions}")
+            completed_state = _rows(
+                client,
+                "ai_conversation_state",
+                {
+                    "conversation_id": f"eq.{session_id}",
+                    "user_id": f"eq.{state['nutritionist_user_id']}",
+                },
+            )
+            if not completed_state or completed_state[0].get("task_status") != "completed":
+                raise E2EFailure(f"task was not completed safely: {completed_state}")
+            report["checks"].append("cozido_reuses_150g_and_returns_186_kcal")
 
             traces = _rows(
                 client,

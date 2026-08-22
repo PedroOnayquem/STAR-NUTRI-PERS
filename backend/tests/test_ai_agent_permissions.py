@@ -50,6 +50,7 @@ class FakeWorkspace:
         self.fail_condition = False
         self.fail_summary = False
         self.state = None
+        self.claimed_message_id = None
 
     async def get_authenticated_profile(self, token):
         return self.profile
@@ -57,11 +58,22 @@ class FakeWorkspace:
     async def get_ai_conversation_state(self, **kwargs):
         return self.state
 
+    async def claim_ai_conversation_turn(self, **kwargs):
+        message_id = kwargs["message_id"]
+        if self.claimed_message_id not in {None, message_id}:
+            return False
+        self.claimed_message_id = message_id
+        return True
+
+    async def release_ai_conversation_turn(self, **kwargs):
+        if self.claimed_message_id == kwargs["message_id"]:
+            self.claimed_message_id = None
+
     async def clear_ai_conversation_state(self, state_id):
         self.state = None
 
     async def upsert_ai_conversation_state(self, payload):
-        self.state = {"id": "state-1", **payload}
+        self.state = {**(self.state or {}), "id": "state-1", **payload}
         return self.state
 
     async def insert_ai_action_log(self, payload):

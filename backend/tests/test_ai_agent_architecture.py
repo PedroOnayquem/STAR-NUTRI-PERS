@@ -89,7 +89,7 @@ class AgentArchitectureTests(unittest.IsolatedAsyncioTestCase):
             ("create_training_plan", {"title": "Treino A", "days": [{"name": "A", "exercises": [{"exercise_name": "Caminhada"}]}]}),
             ("create_diet_plan", {"title": "Dieta A", "calories": 2000, "meals": [{"meal_name": "Cafe", "foods": [{"name": "Banana", "quantity": "1 unidade"}]}]}),
         ])
-        actions = await self.run_agent(workspace, ai)
+        actions = await self.run_agent(workspace, ai, "Crie um treino e uma dieta")
         self.assertEqual([item["tool"] for item in actions], ["create_training_plan", "create_diet_plan"])
         self.assertTrue(all(item["success"] for item in actions))
         self.assertEqual(workspace.mutations.count("create_training_plan"), 1)
@@ -102,7 +102,7 @@ class AgentArchitectureTests(unittest.IsolatedAsyncioTestCase):
             ("register_injury", {"local": "Joelho", "description": "Dor", "severity": "Leve"}),
             ("register_weight_change", {"current_weight_kg": 82}),
         ])
-        actions = await self.run_agent(workspace, ai)
+        actions = await self.run_agent(workspace, ai, "Registre a lesão e o peso do paciente")
         self.assertFalse(actions[0]["success"])
         self.assertEqual(actions[0]["error_code"], "database_error")
         self.assertTrue(actions[1]["success"])
@@ -169,7 +169,7 @@ class AgentArchitectureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_model_json_is_typed_and_never_executed(self):
         workspace = FakeWorkspace()
-        actions = await self.run_agent(workspace, InvalidArgumentsAi())
+        actions = await self.run_agent(workspace, InvalidArgumentsAi(), "Registre o progresso do paciente")
         self.assertEqual(actions[0]["error_code"], "invalid_tool_arguments")
         self.assertFalse(actions[0]["success"])
         self.assertEqual(workspace.mutations, [])

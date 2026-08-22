@@ -44,6 +44,28 @@ class TacoPipelineWorkspace(FakeWorkspace):
         self.calculations = []
 
     async def resolve_taco_food(self, *, food_id=None, query=None, limit=10):
+        if food_id == "food-integral":
+            return {
+                "confidence": "exact",
+                "query": query,
+                "candidates": [],
+                "food": {
+                    "id": "food-integral",
+                    "name": "Arroz, integral, cozido",
+                    "energy_kcal": 124,
+                    "protein_g": 2.6,
+                    "carbohydrate_g": 25.8,
+                    "lipid_g": 1.0,
+                    "fiber_g": 2.7,
+                    "sodium_mg": 1,
+                    "source": "TACO",
+                    "source_edition": "4ª edição ampliada e revisada",
+                    "publication_year": 2011,
+                    "source_url": "https://example.test/taco.xlsx",
+                    "reference_quantity_g": 100,
+                    "reference_basis": "100 g de parte comestível",
+                },
+            }
         if self.confidence == "not_found":
             return {
                 "confidence": "not_found",
@@ -65,9 +87,9 @@ class TacoPipelineWorkspace(FakeWorkspace):
                         "reference_quantity_g": 100,
                     },
                     {
-                        "id": "food-tipo-1",
-                        "name": "Arroz, tipo 1, cozido",
-                        "energy_kcal": 128,
+                        "id": "food-integral-raw",
+                        "name": "Arroz, integral, cru",
+                        "energy_kcal": 360,
                         "source": "TACO",
                         "reference_quantity_g": 100,
                     },
@@ -99,7 +121,7 @@ class TacoPipelineWorkspace(FakeWorkspace):
 
     async def calculate_taco_food_nutrients(self, *, food_id, quantity_g):
         self.calculations.append((food_id, quantity_g))
-        base_energy = 76 if len(self.calculations) > 1 else 128
+        base_energy = 124 if food_id == "food-integral" else 76 if len(self.calculations) > 1 else 128
         factor = quantity_g / 100
         return {
             "energy_kcal": round(base_energy * factor, 2),
@@ -209,6 +231,7 @@ class AiIntentPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [action["tool"] for action in actions],
             ["resolve_taco_nutrition", "resolve_taco_nutrition"],
+            actions,
         )
         self.assertTrue(all(action["success"] for action in actions))
         self.assertEqual(len(workspace.calculations), 2)
@@ -335,6 +358,107 @@ class AiIntentPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(trace["input"]["message_id"], self.message["id"])
         self.assertNotIn(original, json.dumps(trace, ensure_ascii=False))
+
+    async def test_active_taco_task_preserves_150g_and_executes_after_cozido(self):
+        workspace = TacoPipelineWorkspace(confidence="ambiguous")
+        ai = SequencedNutritionAi([])
+        service = AiAgentService(workspace, ai)
+        first_message = {
+            "id": "50000000-0000-4000-8000-000000000010",
+        }
+
+        first_actions = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message=(
+                "Quantas calorias tem 150g de arroz integral segundo a tebela taco?"
+            ),
+            user_message_record=first_message,
+        )
+
+        self.assertEqual(first_actions[0]["status"], "waiting_clarification")
+        self.assertEqual(workspace.state["task_status"], "waiting_user")
+        self.assertEqual(workspace.state["task_slots"]["quantity_g"], 150)
+        self.assertEqual(workspace.state["task_domain"], "nutrition")
+
+        second_actions = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[
+                {
+                    "role": "user",
+                    "content": "Quantas calorias tem 150g de arroz integral segundo a tebela taco?",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Você se refere ao arroz integral cozido ou cru?",
+                },
+            ],
+            reasoning_level="medium",
+            token="token",
+            user_message="cozido",
+            user_message_record={
+                "id": "50000000-0000-4000-8000-000000000011",
+            },
+        )
+
+        self.assertEqual([action["tool"] for action in second_actions], ["resolve_taco_nutrition"])
+        self.assertTrue(second_actions[0]["success"], second_actions)
+        self.assertEqual(second_actions[0]["arguments"]["quantity_g"], 150)
+        self.assertEqual(second_actions[0]["result"]["nutrients"]["energy_kcal"], 186)
+        self.assertEqual(workspace.calculations[-1], ("food-integral", 150))
+        self.assertEqual(workspace.state["task_status"], "completed")
+        self.assertEqual(ai.received, [])
+
+    async def test_task_lock_blocks_patient_tool_during_taco_task(self):
+        workspace = TacoPipelineWorkspace()
+        service = AiAgentService(workspace, SequencedNutritionAi([]))
+        active = service.task_state.new_task(
+            "Quantas calorias tem 150g de arroz integral segundo a TACO?"
+        )
+
+        action = await service._execute_tool(
+            actor=workspace.profile,
+            active_task=active,
+            arguments={"query": "Pedro"},
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            intent=active.intent,
+            message=self.message,
+            tool_name="search_patient_by_name",
+        )
+
+        self.assertEqual(action["status"], "blocked")
+        self.assertEqual(action["error_code"], "task_domain_mismatch")
+        self.assertEqual(workspace.mutations, [])
+
+    async def test_concurrent_turn_in_same_conversation_is_blocked(self):
+        workspace = TacoPipelineWorkspace()
+        workspace.claimed_message_id = "50000000-0000-4000-8000-000000000099"
+        service = AiAgentService(workspace, SequencedNutritionAi([]))
+
+        actions = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="cozido",
+            user_message_record=self.message,
+        )
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["status"], "blocked")
+        self.assertEqual(actions[0]["error_code"], "conversation_turn_in_progress")
+        self.assertEqual(workspace.claimed_message_id, "50000000-0000-4000-8000-000000000099")
+        self.assertEqual(workspace.mutations, [])
 
 
 if __name__ == "__main__":
