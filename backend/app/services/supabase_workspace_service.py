@@ -1698,6 +1698,43 @@ class SupabaseWorkspaceService:
         )
         return rows[0] if rows else None
 
+    async def claim_ai_conversation_turn(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        message_id: str,
+        ttl_seconds: int = 180,
+    ) -> bool:
+        result = await self._request(
+            "POST",
+            "/rest/v1/rpc/claim_ai_conversation_turn",
+            json={
+                "p_conversation_id": conversation_id,
+                "p_user_id": user_id,
+                "p_message_id": message_id,
+                "p_ttl_seconds": ttl_seconds,
+            },
+        )
+        return bool(result)
+
+    async def release_ai_conversation_turn(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        message_id: str,
+    ) -> None:
+        await self._request(
+            "POST",
+            "/rest/v1/rpc/release_ai_conversation_turn",
+            json={
+                "p_conversation_id": conversation_id,
+                "p_user_id": user_id,
+                "p_message_id": message_id,
+            },
+        )
+
     async def upsert_ai_conversation_state(self, payload: dict) -> dict:
         rows = await self._request(
             "POST",
