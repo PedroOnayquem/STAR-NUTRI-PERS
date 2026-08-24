@@ -8,11 +8,22 @@ function chatBasePath(scope: ChatScope) {
   return scope === 'nutritionist' ? '/api/chat/nutritionist' : '/api/chat/patient'
 }
 
+export function chatMessagesPath(
+  scope: ChatScope,
+  sessionId: string,
+  options?: { limit?: number; offset?: number },
+) {
+  const limit = options?.limit ?? 120
+  const offset = options?.offset ?? 0
+  return `${chatBasePath(scope)}/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`
+}
+
 export function listChatSessions(
   session: Session | null,
   scope: ChatScope,
   patientId?: string,
   chatScope?: 'general' | 'patient',
+  signal?: AbortSignal,
 ) {
   const params = new URLSearchParams()
   if (chatScope) params.set('chat_scope', chatScope)
@@ -21,6 +32,7 @@ export function listChatSessions(
   return apiRequest<ChatSessionRecord[]>(
     `${chatBasePath(scope)}/sessions${search}`,
     session,
+    { signal },
   )
 }
 
@@ -52,13 +64,14 @@ export function listChatMessages(
   session: Session | null,
   scope: ChatScope,
   sessionId: string,
-  options?: { limit?: number; offset?: number },
+  options?: { limit?: number; offset?: number; signal?: AbortSignal },
 ) {
   const limit = options?.limit ?? 120
   const offset = options?.offset ?? 0
   return apiRequest<ChatMessageRecord[]>(
-    `${chatBasePath(scope)}/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`,
+    chatMessagesPath(scope, sessionId, { limit, offset }),
     session,
+    { signal: options?.signal },
   )
 }
 

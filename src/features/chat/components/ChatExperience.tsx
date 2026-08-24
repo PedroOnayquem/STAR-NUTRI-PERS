@@ -303,7 +303,7 @@ export function ChatExperience({
                         created_at: new Date().toISOString(),
                         chat_id: chat.activeSessionId || 'new',
                         id: 'streaming',
-                        metadata: { agent_actions: chat.streamingActions },
+                        metadata: null,
                         sender: 'ai',
                       }}
                       own={false}

@@ -20,7 +20,8 @@
     "lint": "eslint .",
     "taco:import": "node --require ./scripts/node-userinfo-shim.cjs --import tsx scripts/import-taco.ts",
     "taco:validate": "node --require ./scripts/node-userinfo-shim.cjs --import tsx scripts/import-taco.ts --dry-run",
-    "test:taco": "node --require ./scripts/node-userinfo-shim.cjs --import tsx --test scripts/import-taco.test.ts"
+    "test:taco": "node --require ./scripts/node-userinfo-shim.cjs --import tsx --test scripts/import-taco.test.ts",
+    "test:chat": "node --require ./scripts/node-userinfo-shim.cjs --import tsx --test scripts/chat-context.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
