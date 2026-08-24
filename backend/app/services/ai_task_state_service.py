@@ -16,6 +16,8 @@ ACTIVE_TASK_STATUSES = {
     "validating",
     "pending_confirmation",
     "completed",
+    "failed",
+    "blocked",
 }
 
 TACO_TOOLS = {
@@ -157,12 +159,22 @@ class AiTaskStateService:
         *,
         state: dict | None,
         user_message: str,
+        history: list[dict[str, str]] | None = None,
     ) -> ActiveTask | None:
         active = self.from_state(state)
+        recovered = self._recover_task_from_history(
+            history or [],
+            user_message=user_message,
+            preferred_domain=active.domain if active else None,
+        )
+        if active and recovered:
+            active = self._fill_missing_from_recovered(active, recovered)
+        elif not active:
+            active = recovered
         detected_domain = self.detect_domain(user_message)
         if (
             active
-            and active.status == "completed"
+            and active.status in {"completed", "failed", "blocked"}
             and not self.should_continue_completed(
                 active=active,
                 detected_domain=detected_domain,
@@ -227,6 +239,33 @@ class AiTaskStateService:
             )
         domain = detected_domain or self.detect_domain(user_message)
         if not domain:
+            continuation_slots = self.extract_taco_slots(
+                user_message,
+                continuation=True,
+            )
+            if (
+                continuation_slots.get("quantity_g") is not None
+                and self.is_referential_followup(user_message)
+            ):
+                continuation_slots.setdefault("source", "TACO")
+                required = [
+                    "food_name",
+                    "quantity_g",
+                    "source",
+                    "requested_nutrients",
+                ]
+                return ActiveTask(
+                    domain="nutrition",
+                    intent="taco_nutrition_lookup",
+                    slots=continuation_slots,
+                    required_slots=required,
+                    missing_slots=self._missing(required, continuation_slots),
+                    ambiguous_slots=[],
+                    allowed_tools=set(TACO_TOOLS),
+                    status="needs_clarification",
+                    evidence={},
+                    context_entities={},
+                )
             return None
 
         if domain == "nutrition" and self.is_taco_lookup(user_message):
@@ -532,30 +571,122 @@ class AiTaskStateService:
         elif re.search(r"\btbca\b", normalized):
             slots["source"] = "TBCA"
 
-        if not continuation or len(normalized.split()) > 3:
-            food_match = re.search(
-                r"\b(?:de|do|da)\s+(?:\d+(?:[.,]\d+)?\s*(?:g|gramas?|kg)\s+de\s+)?(.+?)(?:\s+segundo|\s+(?:na|pela)\s+(?:tebela|tabela)|[?.!]|$)",
-                normalized,
-            )
-            if not food_match:
-                food_match = re.search(
-                    r"\b(?:trocar|substituir|mudar)\s+(?:isso\s+)?(?:por|para)\s+(.+?)(?:[?.!]|$)",
-                    normalized,
-                )
-            if food_match:
-                food_name = food_match.group(1).strip()
-                food_name = re.sub(r"\b(?:ta[ck]o|tbca)\b.*$", "", food_name).strip()
-                if food_name:
-                    slots["food_name"] = food_name
-            elif re.search(r"\b(analisando|avaliando)\b", normalized):
-                context_food = re.search(
-                    r"\b(?:analisando|avaliando)\s+(.+?)(?:[?.!]|$)",
-                    normalized,
-                )
-                if context_food:
-                    slots["food_name"] = context_food.group(1).strip()
+        food_name = self._extract_food_name(normalized, continuation=continuation)
+        if food_name:
+            slots["food_name"] = food_name
 
         return slots
+
+    def _extract_food_name(self, normalized: str, *, continuation: bool) -> str | None:
+        """Extract a food entity without depending on one sentence template.
+
+        The active task still decides whether this text belongs to nutrition;
+        this helper only resolves the entity inside that already-authorized
+        domain. Bare answers such as ``frango frito, 200g`` are accepted, while
+        referential answers such as ``e 200g`` deliberately produce no food.
+        """
+
+        quantity_pattern = r"\d+(?:[.,]\d+)?\s*(?:g|gramas?|kg)"
+        end_pattern = r"(?:\s+segundo|\s+(?:na|pela)\s+(?:tebela|tabela)|[?,.!]|$)"
+        patterns = (
+            rf"\b(?:trocar|substituir|mudar)\s+(?:isso\s+)?(?:por|para)\s+(.+?){end_pattern}",
+            rf"\b(?:analisando|avaliando)\s+(.+?){end_pattern}",
+            rf"\b(?:tem|possui|contem)\s+(?:um|uma|o|a)?\s*(?:{quantity_pattern}\s+de\s+)?(.+?){end_pattern}",
+            rf"\b(?:de|do|da)\s+(?:{quantity_pattern}\s+de\s+)?(.+?){end_pattern}",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, normalized)
+            if match:
+                candidate = self._clean_food_candidate(match.group(1), quantity_pattern)
+                if candidate:
+                    return candidate
+
+        if continuation:
+            candidate = re.sub(rf"\b{quantity_pattern}\b", " ", normalized)
+            candidate = re.sub(
+                r"\b(?:e|em|para|por|com|se|for|tem|quanto|quantas?|calorias?|kcal|"
+                r"proteinas?|carboidratos?|gorduras?|fibras?|sodio|faca|faz|consulte|"
+                r"consulta|agora|pode|isso|esse|essa|mesmo|mesma)\b",
+                " ",
+                candidate,
+            )
+            candidate = self._clean_food_candidate(candidate, quantity_pattern)
+            if (
+                candidate
+                and any(char.isalpha() for char in candidate)
+                and candidate not in {
+                    "cozido", "cozida", "cru", "crua", "assado", "assada",
+                    "frito", "frita", "grelhado", "grelhada", "refogado", "refogada",
+                }
+            ):
+                return candidate
+        return None
+
+    def _clean_food_candidate(self, value: str, quantity_pattern: str) -> str:
+        candidate = re.sub(rf"\b{quantity_pattern}\b", " ", value)
+        candidate = re.sub(r"\b(?:ta[ck]o|tbca)\b.*$", "", candidate)
+        candidate = re.sub(r"^(?:um|uma|o|a)\s+", "", candidate)
+        candidate = re.sub(
+            r"\b(?:qual|quais|quantas?|quanto|mais|menos|maior|menor|calorias?|kcal|proteinas?|carboidratos?|"
+            r"gorduras?|fibras?|sodio|nutrientes?|macros?)\b",
+            " ",
+            candidate,
+        )
+        candidate = re.sub(
+            r"^(?:(?:em|para|por|com|se|for|de|do|da|e)\b\s*)+",
+            "",
+            candidate,
+        )
+        candidate = " ".join(candidate.strip(" ,;:-").split())
+        if candidate in {"", "mais", "menos", "maior", "menor", "tem", "teria"}:
+            return ""
+        return candidate
+
+    def _recover_task_from_history(
+        self,
+        history: list[dict[str, str]],
+        *,
+        user_message: str,
+        preferred_domain: str | None,
+    ) -> ActiveTask | None:
+        if not self.is_referential_followup(user_message) and preferred_domain is None:
+            return None
+        for message in reversed(history):
+            if message.get("role") != "user":
+                continue
+            recovered = self.new_task(str(message.get("content") or ""))
+            if not recovered:
+                continue
+            if preferred_domain and recovered.domain != preferred_domain:
+                continue
+            return recovered
+        return None
+
+    def _fill_missing_from_recovered(
+        self,
+        active: ActiveTask,
+        recovered: ActiveTask,
+    ) -> ActiveTask:
+        if active.domain != recovered.domain:
+            return active
+        slots = dict(active.slots)
+        for key, value in recovered.slots.items():
+            if slots.get(key) in (None, "", []):
+                slots[key] = value
+        missing = self._missing(active.required_slots, slots)
+        return ActiveTask(
+            domain=active.domain,
+            intent=active.intent,
+            slots=slots,
+            required_slots=list(active.required_slots),
+            missing_slots=missing,
+            ambiguous_slots=list(active.ambiguous_slots),
+            allowed_tools=set(active.allowed_tools),
+            status="ready" if not missing and not active.ambiguous_slots else active.status,
+            evidence=dict(active.evidence),
+            context_entities=dict(active.context_entities),
+            state_id=active.state_id,
+        )
 
     def _merge_evidence(self, evidence: dict[str, Any], action: dict) -> dict[str, Any]:
         result = action.get("result") if isinstance(action.get("result"), dict) else {}

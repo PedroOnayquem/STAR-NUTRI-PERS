@@ -413,6 +413,7 @@ async def _stream_chat_response(
         limit=reasoning_settings["history_limit"],
     )
     history = guardrails.sanitize_history(history)
+    conversation_memory_context = context
     memory_context = await context_service.load_memory_context(
         chat=session,
         chat_scope=chat_scope,
@@ -420,6 +421,21 @@ async def _stream_chat_response(
         token=token,
         user_message=payload.content,
     )
+    referenced_patient = memory_context.get("referenced_patient") or {}
+    if (
+        chat_scope == "nutritionist"
+        and not context.get("patient")
+        and referenced_patient.get("id")
+    ):
+        # A uniquely named patient in a general chat is resolved by the
+        # nutritionist-owned index, then hydrated through the same authorized
+        # backend path used by patient-scoped pages. Memory identifies the
+        # reference; structured database data remains the source of truth.
+        context = await workspace.get_patient_context_for_nutritionist(
+            token,
+            str(referenced_patient["id"]),
+            include_chat_context=True,
+        )
     if settings.app_env == "development":
         print(
             "[chat] context loaded",
@@ -471,6 +487,7 @@ async def _stream_chat_response(
                 token=token,
                 user_message=payload.content,
                 user_message_record=user_message,
+                memory_context=memory_context,
             )
             for action in agent_actions:
                 yield _event("action", action)
@@ -558,7 +575,7 @@ async def _stream_chat_response(
                 ai_service=ai_service,
                 chat=session,
                 chat_scope=chat_scope,
-                context=context,
+                context=conversation_memory_context,
                 messages_table=messages_table,
                 token=token,
             )
@@ -770,6 +787,46 @@ def _with_agent_actions(system_prompt: str, actions: list[dict]) -> str:
 
 
 def _answer_from_agent_actions(actions: list[dict]) -> str | None:
+    taco_actions = [
+        action
+        for action in actions
+        if action.get("tool") == "resolve_taco_nutrition"
+    ]
+    if taco_actions:
+        summaries = [
+            str((action.get("result") or {}).get("summary") or action.get("error") or "").strip()
+            for action in taco_actions
+        ]
+        return "\n".join(summary for summary in summaries if summary) or None
+
+    comparisons = [
+        action
+        for action in actions
+        if action.get("tool") == "compare_nutrition_evidence"
+        and action.get("success") is True
+    ]
+    if comparisons:
+        items = (comparisons[-1].get("result") or {}).get("comparisons") or []
+        energy_items = [
+            (
+                item.get("quantity_g"),
+                (item.get("nutrients") or {}).get("energy_kcal"),
+            )
+            for item in items
+            if item.get("quantity_g") is not None
+            and (item.get("nutrients") or {}).get("energy_kcal") is not None
+        ]
+        if energy_items:
+            largest = max(energy_items, key=lambda item: float(item[1]))
+            values = "; ".join(
+                f"{_pt_number(quantity)} g: {_pt_number(energy)} kcal"
+                for quantity, energy in energy_items
+            )
+            return (
+                f"Segundo a TACO, comparando o mesmo alimento, {values}. "
+                f"A porção de {_pt_number(largest[0])} g tem mais calorias."
+            )
+
     decisive = [
         action
         for action in actions
@@ -788,6 +845,15 @@ def _answer_from_agent_actions(actions: list[dict]) -> str | None:
         ).strip()
         for action in decisive
     ).strip() or None
+
+
+def _pt_number(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    text = f"{number:.2f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",")
 
 
 def _debug_context_payload(context: dict) -> dict:

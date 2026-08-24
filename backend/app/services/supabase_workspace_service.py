@@ -3035,17 +3035,22 @@ class SupabaseWorkspaceService:
         limit: int = 120,
         offset: int = 0,
     ) -> list[dict]:
-        return await self._request(
+        # Fetch the newest page so both the UI and the agent receive the
+        # current turn even after a long conversation. PostgREST must read in
+        # descending order for LIMIT/OFFSET to select the latest rows; reverse
+        # locally to keep the public response chronological.
+        rows = await self._request(
             "GET",
             f"/rest/v1/{table}",
             params={
                 "chat_id": f"eq.{chat_id}",
                 "select": "*",
-                "order": "created_at.asc",
-                "limit": str(limit),
-                "offset": str(offset),
+                "order": "created_at.desc,id.desc",
+                "limit": str(min(max(limit, 1), 300)),
+                "offset": str(max(offset, 0)),
             },
         )
+        return list(reversed(rows))
 
     async def list_recent_messages_for_chats(
         self,

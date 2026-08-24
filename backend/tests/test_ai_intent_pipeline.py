@@ -270,6 +270,44 @@ class AiIntentPipelineTests(unittest.IsolatedAsyncioTestCase):
         synthesis = _with_agent_actions("PROMPT", [search_action])
         self.assertIn("Busca de candidatos nao e resposta nutricional", synthesis)
 
+    def test_authoritative_taco_result_is_rendered_without_provider_dependency(self):
+        answer = _answer_from_agent_actions(
+            [
+                {
+                    "tool": "resolve_taco_nutrition",
+                    "status": "executed",
+                    "success": True,
+                    "result": {
+                        "summary": "200g de Frango segundo a TACO: 320 kcal.",
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(answer, "200g de Frango segundo a TACO: 320 kcal.")
+
+    def test_contextual_comparison_is_rendered_from_authoritative_evidence(self):
+        answer = _answer_from_agent_actions(
+            [
+                {
+                    "tool": "compare_nutrition_evidence",
+                    "status": "executed",
+                    "success": True,
+                    "result": {
+                        "comparisons": [
+                            {"quantity_g": 120, "nutrients": {"energy_kcal": 148.8}},
+                            {"quantity_g": 200, "nutrients": {"energy_kcal": 248}},
+                        ]
+                    },
+                }
+            ]
+        )
+
+        self.assertIn("120 g: 148,8 kcal", answer)
+        self.assertIn("200 g: 248 kcal", answer)
+        self.assertIn("200 g tem mais calorias", answer)
+        self.assertIn("Segundo a TACO", answer)
+
     def test_search_candidates_cannot_ground_arbitrary_nutrient_claim(self):
         validation = AiGuardrailService().validate_output(
             "Segundo a TACO, 150 g de arroz têm 195 kcal.",
@@ -544,6 +582,63 @@ class AiIntentPipelineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(workspace.state["task_status"], "completed")
         self.assertEqual(len(workspace.state["task_evidence"]["items"]), 4)
+
+    async def test_frango_frito_clarification_then_bare_answer_executes_lookup(self):
+        workspace = TacoPipelineWorkspace()
+        service = AiAgentService(workspace, SequencedNutritionAi([]))
+
+        first = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="Quantas calorias tem um frango frito?",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000030"},
+        )
+        second = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[
+                {"role": "user", "content": "Quantas calorias tem um frango frito?"},
+                {"role": "assistant", "content": "Qual quantidade voce deseja consultar?"},
+            ],
+            reasoning_level="medium",
+            token="token",
+            user_message="Frango frito, 200g",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000031"},
+        )
+
+        self.assertEqual(first[0]["status"], "waiting_clarification")
+        self.assertEqual(first[0]["result"]["active_task"]["missing_slots"], ["quantity_g"])
+        self.assertEqual(second[0]["tool"], "resolve_taco_nutrition")
+        self.assertTrue(second[0]["success"], second)
+        self.assertEqual(second[0]["arguments"]["food_name"], "frango frito")
+        self.assertEqual(second[0]["arguments"]["quantity_g"], 200)
+        self.assertEqual(workspace.state["task_status"], "completed")
+
+    async def test_context_free_bare_quantity_requests_food_without_provider(self):
+        workspace = TacoPipelineWorkspace()
+        ai = SequencedNutritionAi([])
+        service = AiAgentService(workspace, ai)
+
+        actions = await service.run(
+            chat=self.chat,
+            chat_scope="nutritionist",
+            context=self.context,
+            history=[],
+            reasoning_level="medium",
+            token="token",
+            user_message="e 120g?",
+            user_message_record={"id": "50000000-0000-4000-8000-000000000032"},
+        )
+
+        self.assertEqual(actions[0]["tool"], "conversation_state")
+        self.assertEqual(actions[0]["status"], "waiting_clarification")
+        self.assertIn("food_name", actions[0]["result"]["active_task"]["missing_slots"])
+        self.assertEqual(ai.received, [])
 
     async def test_concurrent_turn_in_same_conversation_is_blocked(self):
         workspace = TacoPipelineWorkspace()

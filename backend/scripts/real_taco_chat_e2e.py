@@ -1,7 +1,7 @@
 """Opt-in E2E for the real HTTP chat pipeline and TACO grounding.
 
-Creates one isolated nutritionist, tests ambiguity followed by contextual
-clarification through FastAPI/SSE, verifies audit traces, and removes all data.
+Creates one isolated nutritionist, tests task-slot continuation and ambiguity
+through FastAPI/SSE, verifies history/audit traces, and removes all data.
 """
 
 from __future__ import annotations
@@ -73,6 +73,86 @@ def run() -> dict[str, Any]:
             )
             state["nutritionist_id"] = str(nutritionist["id"])
             token = _login(client, email, password)
+            chicken_session = _require(
+                client.post(
+                    f"{API_BASE}/chat/nutritionist/sessions",
+                    headers=_bearer(token),
+                    json={
+                        "chat_scope": "general",
+                        "title": f"E2E CHICKEN CONTEXT {suffix}",
+                    },
+                ),
+                {200},
+                "create chicken context chat",
+            )
+            chicken_session_id = str(chicken_session["id"])
+            first_actions, first_answer = _send(
+                client,
+                endpoint="chat/nutritionist/send",
+                token=token,
+                session_id=chicken_session_id,
+                content="Quantas calorias tem um frango frito?",
+            )
+            first_state_actions = [
+                action
+                for action in first_actions
+                if action.get("operation") == "conversation_state"
+            ]
+            first_missing = (
+                (first_state_actions[-1].get("result") or {})
+                .get("active_task", {})
+                .get("missing_slots")
+                if first_state_actions
+                else None
+            )
+            if first_missing != ["quantity_g"] or "quantidade" not in first_answer.lower():
+                raise E2EFailure(
+                    f"food was not retained before quantity clarification: {first_actions} / {first_answer}"
+                )
+
+            chicken_actions, chicken_answer = _send(
+                client,
+                endpoint="chat/nutritionist/send",
+                token=token,
+                session_id=chicken_session_id,
+                content="Frango frito, 200g",
+            )
+            chicken_lookup = [
+                action
+                for action in chicken_actions
+                if action.get("operation") == "resolve_taco_nutrition"
+            ]
+            if not chicken_lookup:
+                raise E2EFailure(f"chicken follow-up did not execute TACO lookup: {chicken_actions}")
+            chicken_arguments = chicken_lookup[-1].get("arguments") or {}
+            if (
+                chicken_arguments.get("food_name") != "frango frito"
+                or chicken_arguments.get("quantity_g") != 200
+            ):
+                raise E2EFailure(f"chicken slots were not merged: {chicken_lookup[-1]}")
+            if "qual alimento" in chicken_answer.lower():
+                raise E2EFailure(f"chicken follow-up repeated an answered question: {chicken_answer}")
+
+            history = _require(
+                client.get(
+                    f"{API_BASE}/chat/nutritionist/sessions/{chicken_session_id}/messages",
+                    headers=_bearer(token),
+                    params={"limit": 80, "offset": 0},
+                ),
+                {200},
+                "load canonical chat history",
+            )
+            if [message.get("sender") for message in history] != [
+                "nutritionist",
+                "ai",
+                "nutritionist",
+                "ai",
+            ]:
+                raise E2EFailure(f"canonical history is incomplete or unordered: {history}")
+            report["checks"].append(
+                "frango_food_quantity_slots_merge_and_history_endpoint_returns_200"
+            )
+
             session = _require(
                 client.post(
                     f"{API_BASE}/chat/nutritionist/sessions",
@@ -129,18 +209,30 @@ def run() -> dict[str, Any]:
                 {200},
                 "create isolated nutritionist chat",
             )
-            other_actions, _ = _send(
+            other_actions, other_answer = _send(
                 client,
                 endpoint="chat/nutritionist/send",
                 token=token,
                 session_id=str(other_session["id"]),
-                content="Agora procure o paciente Pedro.",
+                content="e 120g?",
             )
-            if not any(action.get("operation") == "search_patient_by_name" for action in other_actions):
-                raise E2EFailure(f"explicit patient task was not routed: {other_actions}")
-            if any(action.get("operation") in {"resolve_taco_nutrition", "search_taco_foods"} for action in other_actions):
-                raise E2EFailure(f"patient conversation received TACO tools: {other_actions}")
-            report["checks"].append("second_conversation_isolated_and_explicit_switch_routed")
+            isolated_state = [
+                action
+                for action in other_actions
+                if action.get("operation") == "conversation_state"
+            ]
+            isolated_missing = (
+                (isolated_state[-1].get("result") or {})
+                .get("active_task", {})
+                .get("missing_slots")
+                if isolated_state
+                else []
+            )
+            if "food_name" not in isolated_missing or "alimento" not in other_answer.lower():
+                raise E2EFailure(f"second conversation inherited TACO food state: {other_actions}")
+            if any(action.get("operation") == "search_patient_by_name" for action in other_actions):
+                raise E2EFailure(f"context-free quantity called a patient tool: {other_actions}")
+            report["checks"].append("second_conversation_isolated_and_context_free_followup_clarified")
 
             resolved_actions, resolved_answer = _send(
                 client,

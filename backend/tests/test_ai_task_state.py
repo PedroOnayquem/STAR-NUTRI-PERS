@@ -19,6 +19,81 @@ class AiTaskStateTests(unittest.TestCase):
         self.assertEqual(task.slots["source"], "TACO")
         self.assertEqual(task.slots["requested_nutrients"], ["energy_kcal"])
 
+    def test_nutrition_question_extracts_food_after_tem_and_only_asks_quantity(self):
+        task = self.service.new_task("Quantas calorias tem um frango frito?")
+
+        self.assertEqual(task.intent, "taco_nutrition_lookup")
+        self.assertEqual(task.slots["food_name"], "frango frito")
+        self.assertEqual(task.slots["preparation"], "frito")
+        self.assertEqual(task.missing_slots, ["quantity_g"])
+
+    def test_bare_food_and_quantity_complete_the_existing_task(self):
+        initial = self.service.new_task("Quantas calorias tem um frango frito?")
+        state = self.service.payload(
+            initial,
+            conversation_id="conversation-chicken",
+            user_id="user-a",
+            patient_id=None,
+            last_message_id="message-a",
+            expires_at="2026-09-22T20:00:00Z",
+            status="waiting_user",
+        )
+        state["id"] = "state-chicken"
+
+        task = self.service.prepare_turn(
+            state=state,
+            user_message="Frango frito, 200g",
+        )
+
+        self.assertTrue(task.is_ready)
+        self.assertEqual(task.slots["food_name"], "frango frito")
+        self.assertEqual(task.slots["quantity_g"], 200)
+        self.assertEqual(task.slots["requested_nutrients"], ["energy_kcal"])
+
+    def test_referential_followup_recovers_task_from_current_conversation_history(self):
+        task = self.service.prepare_turn(
+            state=None,
+            history=[
+                {
+                    "role": "user",
+                    "content": "Quantas calorias tem 150g de arroz integral cozido?",
+                },
+                {"role": "assistant", "content": "A consulta foi concluida."},
+            ],
+            user_message="e 120g?",
+        )
+
+        self.assertTrue(task.is_ready)
+        self.assertEqual(task.slots["food_name"], "arroz integral cozido")
+        self.assertEqual(task.slots["quantity_g"], 120)
+        self.assertEqual(task.slots["requested_nutrients"], ["energy_kcal"])
+
+    def test_broken_persisted_state_recovers_missing_entity_from_history(self):
+        state = self.service.payload(
+            self.service.new_task("Quantas calorias tem frango frito?"),
+            conversation_id="conversation-chicken",
+            user_id="user-a",
+            patient_id=None,
+            last_message_id="message-a",
+            expires_at="2026-09-22T20:00:00Z",
+            status="waiting_user",
+        )
+        state["task_slots"].pop("food_name")
+        state["missing_slots"] = ["food_name", "quantity_g"]
+
+        task = self.service.prepare_turn(
+            state=state,
+            history=[
+                {"role": "user", "content": "Quantas calorias tem frango frito?"},
+                {"role": "assistant", "content": "Qual quantidade?"},
+            ],
+            user_message="200g",
+        )
+
+        self.assertTrue(task.is_ready)
+        self.assertEqual(task.slots["food_name"], "frango frito")
+        self.assertEqual(task.slots["quantity_g"], 200)
+
     def test_short_preparation_merges_without_erasing_quantity(self):
         state = {
             "id": "state-a",
@@ -186,6 +261,14 @@ class AiTaskStateTests(unittest.TestCase):
 
         self.assertEqual(task.intent, "taco_nutrition_lookup")
         self.assertIn("food_name", task.missing_slots)
+
+    def test_bare_quantity_without_context_is_not_sent_as_free_conversation(self):
+        task = self.service.prepare_turn(state=None, user_message="e 120g?")
+
+        self.assertEqual(task.intent, "taco_nutrition_lookup")
+        self.assertEqual(task.slots["quantity_g"], 120)
+        self.assertIn("food_name", task.missing_slots)
+        self.assertIn("requested_nutrients", task.missing_slots)
 
     def test_comparison_followup_keeps_prior_authoritative_evidence(self):
         state = self._completed_nutrition_state()
